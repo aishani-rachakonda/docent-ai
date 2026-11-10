@@ -1,0 +1,15 @@
+[project]
+name = "met-guide"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+dependencies = [
+    "duckdb>=2.0.0",
+    "fastapi>=0.162.2",
+    "google-cloud-aiplatform>=2.7.0",
+    "httpx>=0.28.1",
+    "openai-agents[litellm]>=0.22",
+    "pandas>=3.1.1",
+    "python-dotenv>=1.2.4",
+    "uvicorn>=0.54.0",
+]
