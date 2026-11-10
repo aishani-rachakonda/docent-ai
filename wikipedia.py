@@ -4,7 +4,9 @@ Wikimedia rejects requests whose User-Agent has no contact URL or email, so set 
 (e.g. the project's GitHub URL). Articles are cached in memory for the life of the process.
 """
 
+import html
 import os
+import re
 from functools import lru_cache
 
 import httpx
@@ -36,3 +38,20 @@ def fetch(title: str) -> dict:
     if len(text) > MAX_CHARS:
         text = text[:MAX_CHARS] + "\n[Article truncated.]"
     return {"title": page["title"], "url": "https://en.wikipedia.org/wiki/" + page["title"].replace(" ", "_"), "text": text}
+
+
+@lru_cache(maxsize=512)
+def search(query: str, limit: int = 5) -> dict:
+    """Return {query, results: [{title, snippet}]} from English Wikipedia's search, or {error}."""
+    if not os.environ.get("WIKI_CONTACT"):
+        return {"error": "Wikipedia is not configured (WIKI_CONTACT is unset)."}
+    params = {"action": "query", "list": "search", "srsearch": query, "srlimit": min(limit, 10),
+              "srprop": "snippet", "format": "json", "formatversion": 2}
+    try:
+        r = httpx.get(API, params=params, headers=_headers(), timeout=20)
+        r.raise_for_status()
+    except httpx.HTTPError as e:
+        return {"error": f"Could not search for '{query}': {type(e).__name__}"}
+    hits = r.json().get("query", {}).get("search", [])
+    clean = lambda s: re.sub(r"<[^>]+>", "", html.unescape(s))  # noqa: E731  (snippets carry <span> highlights)
+    return {"query": query, "results": [{"title": h["title"], "snippet": clean(h.get("snippet", ""))} for h in hits]}

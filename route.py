@@ -99,8 +99,8 @@ def plan(stops: list[dict], start_gallery: str = "", minutes_per_stop: float = 6
         for k, s in enumerate(x for x in main if x["gallery"] == g):
             minutes += (walk if k == 0 else 0) + minutes_per_stop
             key = gallery_key(g)
-            route.append({**s, "walk_minutes_before": round(walk if k == 0 else 0, 1),
-                          "arrive_after_minutes": round(minutes - minutes_per_stop, 1),
+            route.append({**s, "walk_minutes_before": round(walk if k == 0 else 0),
+                          "arrive_after_minutes": round(minutes - minutes_per_stop),
                           "floor": FLOOR_OF_BLOCK.get(key[0]) if key else None,
                           "wing": WING_OF_BLOCK.get(key[0]) if key else None})
         here = g

@@ -49,6 +49,7 @@ class Run:
     def __init__(self):
         self.tool_calls: list[dict] = []
         self.researchers = 0
+        self.storytellers = 0
 
 
 class LogHooks(RunHooks):
@@ -164,13 +165,24 @@ def snapshot_info() -> str:
 
 @function_tool
 def get_wikipedia(title: str) -> str:
-    """Read an English Wikipedia article by exact title. Use only titles from get_object's
-    object_wikipedia or artist_wikipedia fields, so the article is about the right object or artist.
+    """Read an English Wikipedia article by exact title: one from get_object's object_wikipedia or
+    artist_wikipedia fields, or one that search_wikipedia found.
 
     Args:
-        title: The article title, e.g. 'Wheat Field with Cypresses'.
+        title: The article title, e.g. 'Wheat Field with Cypresses' or 'Ptolemaic Kingdom'.
     """
     return _dump(wikipedia.fetch(title))
+
+
+@function_tool
+def search_wikipedia(query: str) -> str:
+    """Search English Wikipedia for article titles, with a short snippet of each. Use it to find
+    background articles about an object's culture, period, material, technique or subject.
+
+    Args:
+        query: A few words from the object's record, e.g. 'Ptolemaic Egypt bronze cat statuette'.
+    """
+    return _dump(wikipedia.search(query))
 
 
 @function_tool
@@ -273,13 +285,13 @@ If the slice has nothing that fits, return an empty candidates list and say so i
 )
 
 
-async def _wrap_up_researcher(data) -> str:
-    """Out of steps: rather than lose the search, ask the same Researcher, with no tools left,
-    to answer from what it has already found."""
+async def _wrap_up(data) -> str:
+    """Out of steps: rather than lose the work, ask the same agent, with no tools left, to answer
+    from what it has already found."""
     agent = data.run_data.last_agent.clone(tools=[])
     history = data.run_data.history + data.run_data.output + [{
         "role": "user", "content": "Your step budget is used up. Reply now with the JSON, using only "
-                                   "objects your tool results already showed. Put what you could not check in gaps."}]
+                                   "what your tool results already showed. Put what you could not check in gaps."}]
     result = await Runner.run(agent, history, context=data.context.context, max_turns=1)
     return str(result.final_output)
 
@@ -303,7 +315,7 @@ async def research(ctx: RunContextWrapper[Run], theme: str, slices: list[str], c
         prompt = f"Theme: {theme}\nYour slice: {slice_}\nReturn up to {candidates_per_slice} candidates."
         try:
             result = await Runner.run(agent, prompt, context=run, hooks=HOOKS, max_turns=RESEARCHER_MAX_TURNS,
-                                      error_handlers={"max_turns": _wrap_up_researcher})
+                                      error_handlers={"max_turns": _wrap_up})
             return {"slice": slice_, "agent": agent.name, "findings": str(result.final_output)}
         except MaxTurnsExceeded:
             return {"slice": slice_, "agent": agent.name,
@@ -314,20 +326,127 @@ async def research(ctx: RunContextWrapper[Run], theme: str, slices: list[str], c
     return _dump(await asyncio.gather(*(one(s) for s in slices)))
 
 
+# --- Storyteller ---
+
+STORYTELLER_MAX_TURNS = 6
+
+storyteller = Agent(
+    name="Storyteller",
+    instructions="""\
+You tell the story of one object at The Met to a visitor who is curious but not an expert: they
+don't know the periods, techniques or terms, and want to understand what they are looking at and
+why it matters. You get the object's Met record and anything a Researcher already found.
+
+Budget: at most 4 tool calls.
+1. If the record has object_wikipedia or artist_wikipedia, read that article with get_wikipedia.
+2. Find one or two background articles that explain the context a non-expert is missing: the
+   culture or period (e.g. 'Ptolemaic Kingdom'), the material or technique (e.g. 'Sancai'), or the
+   subject (e.g. 'Cats in ancient Egypt'). Use search_wikipedia with words from the record, then
+   read the best match with get_wikipedia. Use an article only if it is clearly about this object's
+   own culture, period, material, maker or subject; skip it otherwise.
+3. Reply with JSON only, no prose:
+   {"object_id": 123,
+    "story": "80 to 120 words in plain language: what it is, the context that makes it make sense,
+              and why it matters. Explain any term the visitor may not know, in a few words.",
+    "look_for": "one sentence on something to notice in front of the object",
+    "sources_read": ["Wikipedia titles you used"],
+    "gaps": "what you could not find, or empty"}
+
+Rules:
+- Every fact comes from the record or an article you read in this task. Your own knowledge does not
+  count: if neither says it, leave it out, however well known it is. A background article supports
+  general context (what the Ptolemaic period was), never a claim about this particular object that
+  the record does not make.
+- End each sentence that states a fact with its tag: [met:<object_id>] for the record,
+  [wikipedia:<Exact Article Title>] for an article.
+- look_for must describe only what the record says the object is or shows.
+- Warm and concrete, like a good docent; no hype words ("stunning", "masterpiece", "famous",
+  "testament", "vibrant", "incredible").""",
+    model=WRITER_MODEL,
+    model_settings=SETTINGS,
+    tools=[get_wikipedia, search_wikipedia],
+)
+
+
+async def _tell(run: Run, object_id: int, context: str) -> dict:
+    """One Storyteller, in a fresh context, for one object. Never raises: a failed story is a gap."""
+    record = met_tools.get_object(object_id)
+    if "error" in record:
+        return {"object_id": object_id, "error": record["error"]}
+    run.storytellers += 1
+    agent = storyteller.clone(name=f"Storyteller {run.storytellers}")
+    prompt = f"{context}\n\nMet record:\n{_dump(record)}"
+    try:
+        result = await Runner.run(agent, prompt, context=run, hooks=HOOKS, max_turns=STORYTELLER_MAX_TURNS,
+                                  error_handlers={"max_turns": _wrap_up})
+        return {"object_id": object_id, "agent": agent.name, "story": str(result.final_output)}
+    except Exception as e:  # one story failing must not sink the tour
+        return {"object_id": object_id, "agent": agent.name, "error": f"{type(e).__name__}: {str(e)[:200]}"}
+
+
+async def tell_stories(run: Run, object_ids: list[int], request: str, evidence_json: str) -> list[dict]:
+    """A Storyteller per stop, all in parallel."""
+    def context_for(oid: int) -> str:
+        found = [c for c in _candidates(evidence_json) if str(c.get("object_id")) == str(oid)]
+        return (f"Visitor request: {request}\n"
+                + (f"What the Researcher found:\n{_dump(found[0])}" if found else ""))
+    return list(await asyncio.gather(*(_tell(run, oid, context_for(oid)) for oid in object_ids)))
+
+
+def _candidates(evidence_json: str) -> list[dict]:
+    """Pull candidate objects out of whatever shape the Lead passed as evidence."""
+    out = []
+    def walk(x):
+        if isinstance(x, dict):
+            if "object_id" in x:
+                out.append(x)
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+        elif isinstance(x, str) and x.lstrip().startswith(("{", "[")):
+            try:
+                walk(json.loads(x))
+            except ValueError:
+                pass
+    try:
+        walk(json.loads(evidence_json))
+    except ValueError:
+        pass
+    return out
+
+
+@function_tool
+async def tell_story(ctx: RunContextWrapper[Run], object_id: int, question: str = "") -> str:
+    """Have a Storyteller explain one object in plain language, with Wikipedia background on its
+    culture, period or material. Use it for "what is this?" questions; pass its result to write_answer.
+
+    Args:
+        object_id: The Met object ID.
+        question: What the visitor asked, if anything specific.
+    """
+    return _dump(await _tell(ctx.context, object_id, f"Visitor question: {question or 'What is this?'}"))
+
+
 # --- Writer ---
 
 writer = Agent(
     name="Writer",
     instructions="""\
 You write the visitor-facing text for a museum guide at The Met, from the evidence you are given
-and nothing else.
+and nothing else. Visitors are curious but not experts: plain words, and a few words of explanation
+for any term they may not know.
 
 For a tour: a title, one or two sentences on the thread connecting the stops, then each stop in
 the given order as:
 ### <n>. <Title> — Gallery <number>
 *<artist or culture>, <date>* · about <minutes> min in
-Two to four sentences: what to look at, and why it belongs on this tour. End each sentence that
-states a fact with its source tag: [met:<object_id>] or [wikipedia:<Article Title>].
+The stop's story from its Storyteller, kept close to as written with its source tags (you may trim
+it, join it to the tour's thread in a few words, or drop a sentence; never add facts). Then a line
+"Look for: ..." from the Storyteller's look_for. If a stop has no story, write two or three sentences
+from the Researcher's evidence. End each sentence that states a fact with its source tag:
+[met:<object_id>] or [wikipedia:<Article Title>].
 Then a short "Before you go" list with the route notes you were given (approximate walking times,
 removed stops, optional stops), and anything the data could not tell you.
 
@@ -368,16 +487,24 @@ async def _write(run: Run, prompt: str) -> str:
 
 @function_tool
 async def write_tour(ctx: RunContextWrapper[Run], request: str, route_json: str, evidence_json: str) -> str:
-    """Have the Writer write the final tour from the planned route and the Researchers' evidence.
-    Returns the tour text: reply with it as it is.
+    """Write the final tour: a Storyteller per stop (in parallel) explains each object in plain
+    language with Wikipedia background, then the Writer assembles the tour. Returns the tour text:
+    reply with it as it is.
 
     Args:
         request: The visitor's request and constraints.
         route_json: The JSON that plan_route returned.
         evidence_json: The candidates and evidence for the chosen stops (from research), as JSON.
     """
-    return await _write(ctx.context, f"Visitor request: {request}\n\nRoute (in walking order):\n{route_json}"
-                                     f"\n\nEvidence:\n{evidence_json}")
+    run = ctx.context
+    try:
+        route_data = json.loads(route_json)
+        stops = [s["object_id"] for s in route_data.get("stops", []) + route_data.get("cloisters_stops", [])]
+    except (ValueError, KeyError, TypeError, AttributeError):
+        stops = [int(c["object_id"]) for c in _candidates(evidence_json) if str(c.get("object_id")).isdigit()]
+    stories = await tell_stories(run, list(dict.fromkeys(stops)), request, evidence_json)
+    return await _write(run, f"Visitor request: {request}\n\nRoute (in walking order):\n{route_json}"
+                             f"\n\nStories, one per stop:\n{_dump(stories)}\n\nResearchers' evidence:\n{evidence_json}")
 
 
 @function_tool
@@ -414,16 +541,17 @@ A. A tour ("I have two hours and love Japan"):
      stops), call research again with new slices. At most 3 research calls in total.
    - Call plan_route with the chosen object IDs, the visitor's start gallery and time budget.
    - Call write_tour with the request, plan_route's JSON, and the evidence for the chosen stops.
-     Reply with the tour exactly as write_tour returns it.
+     Its text goes to the visitor as it is.
 
 B. "What is this?" (a label photo, or an accession number / title they typed):
    - Read the accession number, title and artist from the label. Call find_by_accession with the
      title and artist as hints (or find_by_title if there is no number).
    - Name an object only if the status is exact, corrected or near_confirmed. If it is ambiguous,
      mismatch or not_found, say what you read and ask for the title or a clearer photo.
-   - Then call get_object (and get_wikipedia for its object_wikipedia / artist_wikipedia titles),
-     and gallery_summary for its gallery, so you can suggest what to see next nearby.
-   - Call write_answer with the question and that evidence, and reply with its text as it is.
+   - Then call tell_story for it (a plain-language story with Wikipedia background), and
+     gallery_summary for its gallery, so you can suggest what to see next nearby.
+   - Call write_answer with the question and that evidence (the identification result, the story,
+     the gallery summary), and reply with its text as it is.
    - If they are on a tour and ask what is next, re-plan with plan_route from their gallery.
 
 C. Questions about the collection ("how many Monets are on view?", "which gallery has the most
@@ -440,7 +568,9 @@ Always:
 - Keep replies short; visitors are standing in a museum.""",
     model=LEAD_MODEL,
     model_settings=SETTINGS,
-    tools=[research, plan_route, write_tour, write_answer, find_by_accession, find_by_title, get_object, search_objects,
+    # The Writer's checked text is the reply, word for word: the Lead stops as soon as it has it.
+    tool_use_behavior={"stop_at_tool_names": ["write_tour", "write_answer"]},
+    tools=[research, plan_route, write_tour, write_answer, tell_story, find_by_accession, find_by_title, get_object, search_objects,
            gallery_summary, run_sql, snapshot_info, get_wikipedia],
 )
 

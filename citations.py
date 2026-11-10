@@ -30,6 +30,10 @@ def sources_seen(tool_calls: list[dict]) -> tuple[set[str], set[str]]:
             m = re.search(r'"title":\s*"([^"]+)"', text)
             if m and '"error"' not in text:
                 titles.add(m.group(1).lower())
+                # a redirect returns the canonical title; the title that was asked for counts too
+                asked = (call.get("args") or {}).get("title")
+                if asked:
+                    titles.add(str(asked).lower())
     return ids, titles
 
 
