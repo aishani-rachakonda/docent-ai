@@ -15,8 +15,10 @@ import os
 
 import httpx
 from agents import Agent, ModelSettings, RunContextWrapper, RunHooks, Runner, function_tool, set_tracing_disabled
+from agents.exceptions import MaxTurnsExceeded
 from agents.extensions.models.litellm_model import LitellmModel
 
+import citations
 import met_tools
 import route
 import wikipedia
@@ -33,8 +35,8 @@ if PROJECT:
 SETTINGS = ModelSettings(extra_args=_extra)
 
 MAX_RESEARCHERS = 5
-LEAD_MAX_TURNS = 16
-RESEARCHER_MAX_TURNS = 8
+LEAD_MAX_TURNS = 20
+RESEARCHER_MAX_TURNS = 14
 MET_API = "https://collectionapi.metmuseum.org/public/collection/v1/objects/{}"
 
 
@@ -244,10 +246,15 @@ You search one slice of The Met's on-view collection for a museum tour. Your tas
 visitor's theme, the slice to search (a department, culture, period or idea), and how many
 candidates to return.
 
-1. Search with search_objects, trying several short keyword sets and synonyms (the theme's words
+Budget: at most 6 tool calls, then reply. A short list of good candidates beats a long search.
+
+1. Start with run_sql on the tags column when the theme has a matching subject tag (e.g.
+   list_contains(tags, 'Cats'), 'Horses', 'Lions', 'Birds'; see what exists with
+   SELECT unnest(tags) t, count(*) ... GROUP BY t). Otherwise use search_objects, trying several
+   short keyword sets and synonyms (the theme's words
    rarely appear literally: for 'power', try 'king', 'pharaoh', 'emperor', 'throne', 'armor', 'crown').
    Use gallery_summary or run_sql to find galleries dense with relevant objects.
-2. Call get_object on your best candidates to read their details. Prefer objects that have an image,
+2. Call get_object on your best 2 or 3 candidates (not every one) to read their details. Prefer objects that have an image,
    a named maker or a clear story, and highlights. Avoid near-duplicates (ten similar beads).
 3. If an object has object_wikipedia or artist_wikipedia, you may read it with get_wikipedia and quote
    one or two short facts that make the stop interesting.
@@ -284,6 +291,9 @@ async def research(ctx: RunContextWrapper[Run], theme: str, slices: list[str], c
         try:
             result = await Runner.run(agent, prompt, context=run, hooks=HOOKS, max_turns=RESEARCHER_MAX_TURNS)
             return {"slice": slice_, "agent": agent.name, "findings": str(result.final_output)}
+        except MaxTurnsExceeded:
+            return {"slice": slice_, "agent": agent.name,
+                    "error": "Ran out of steps before answering. Try a narrower slice."}
         except Exception as e:  # one Researcher failing must not sink the tour
             return {"slice": slice_, "agent": agent.name, "error": f"{type(e).__name__}: {str(e)[:200]}"}
 
@@ -309,11 +319,37 @@ removed stops, optional stops), and anything the data could not tell you.
 
 For a single object or a question: a short, direct answer with source tags on every fact.
 
-Rules: use only facts in the evidence. If the evidence does not say something, do not say it.
-Plain, warm, concrete language; no hype words ("stunning", "masterpiece", "testament").""",
+Rules:
+- Use only facts in the evidence. Your own knowledge of art history does not count as evidence:
+  if the evidence does not say it, leave it out, however well known it is.
+- Every sentence that states a fact ends with its tag. Tag objects by the object_id in the evidence.
+- Counts and other results of a query (how many, which galleries) take one [data] tag instead of a
+  tag per object, and say the date of the data, e.g. "in the Met's on-view data as of Nov 7, 2026".
+  Use csv_latest_metadata_date from snapshot_info as that date when it is in the evidence.
+- Plain, warm, concrete language; no hype words ("stunning", "masterpiece", "famous", "testament",
+  "vibrant", "incredible"). No bold labels inside sentences.""",
     model=WRITER_MODEL,
     model_settings=SETTINGS,
 )
+
+
+async def _write(run: Run, prompt: str) -> str:
+    """Have the Writer draft, check its citations in code, and let it revise once if they fail."""
+    result = await Runner.run(writer, prompt, context=run, hooks=HOOKS, max_turns=2)
+    draft = str(result.final_output)
+    report = citations.check(draft, run.tool_calls)
+    run.tool_calls.append({"agent": "Citation check", "name": "check_citations", "args": {"draft": draft[:500]},
+                           "result": _dump(report)})
+    if report["ok"]:
+        return draft
+    fix = (f"{prompt}\n\nYour draft:\n{draft}\n\nA citation check found problems. Fix them: add a tag to each "
+           "uncited sentence if the evidence supports it, otherwise cut the sentence; remove or correct unknown "
+           f"sources. Reply with the full corrected text only.\n{_dump(report)}")
+    result = await Runner.run(writer, fix, context=run, hooks=HOOKS, max_turns=2)
+    final = str(result.final_output)
+    run.tool_calls.append({"agent": "Citation check", "name": "check_citations", "args": {"draft": final[:500]},
+                           "result": _dump(citations.check(final, run.tool_calls))})
+    return final
 
 
 @function_tool
@@ -326,9 +362,21 @@ async def write_tour(ctx: RunContextWrapper[Run], request: str, route_json: str,
         route_json: The JSON that plan_route returned.
         evidence_json: The candidates and evidence for the chosen stops (from research), as JSON.
     """
-    prompt = f"Visitor request: {request}\n\nRoute (in walking order):\n{route_json}\n\nEvidence:\n{evidence_json}"
-    result = await Runner.run(writer, prompt, context=ctx.context, hooks=HOOKS, max_turns=2)
-    return str(result.final_output)
+    return await _write(ctx.context, f"Visitor request: {request}\n\nRoute (in walking order):\n{route_json}"
+                                     f"\n\nEvidence:\n{evidence_json}")
+
+
+@function_tool
+async def write_answer(ctx: RunContextWrapper[Run], question: str, evidence_json: str) -> str:
+    """Have the Writer answer a question about an object or the collection from evidence you gathered
+    (tool results: object records, query results, Wikipedia text, and any caveats). Returns the answer:
+    reply with it as it is.
+
+    Args:
+        question: The visitor's question, plus anything you need to tell them (e.g. a number was misread).
+        evidence_json: The tool results the answer rests on, as JSON. Include object_id on every object.
+    """
+    return await _write(ctx.context, f"Visitor question: {question}\n\nEvidence:\n{evidence_json}")
 
 
 # --- Lead ---
@@ -347,8 +395,9 @@ A. A tour ("I have two hours and love Japan"):
    - Otherwise call research once with 2 to 5 slices that cover the theme across different
      departments. Then pick 8 to 12 stops (fewer for under an hour) from the candidates: varied,
      on theme, not crowded into one gallery.
-   - If the findings leave a gap (a slice came back empty, or fewer than 6 good stops), call
-     research again with new slices. At most 3 research calls in total.
+   - Use the Researchers' candidates as they are: do not search the collection yourself during
+     a tour. If the findings leave a gap (a slice came back empty or failed, or fewer than 6 good
+     stops), call research again with new slices. At most 3 research calls in total.
    - Call plan_route with the chosen object IDs, the visitor's start gallery and time budget.
    - Call write_tour with the request, plan_route's JSON, and the evidence for the chosen stops.
      Reply with the tour exactly as write_tour returns it.
@@ -358,29 +407,42 @@ B. "What is this?" (a label photo, or an accession number / title they typed):
      title and artist as hints (or find_by_title if there is no number).
    - Name an object only if the status is exact, corrected or near_confirmed. If it is ambiguous,
      mismatch or not_found, say what you read and ask for the title or a clearer photo.
-   - Then call get_object (and get_wikipedia for its linked articles) and answer briefly with
-     source tags [met:<id>] / [wikipedia:<title>]. Offer what to see next nearby.
+   - Then call get_object (and get_wikipedia for its object_wikipedia / artist_wikipedia titles),
+     and gallery_summary for its gallery, so you can suggest what to see next nearby.
+   - Call write_answer with the question and that evidence, and reply with its text as it is.
    - If they are on a tour and ask what is next, re-plan with plan_route from their gallery.
 
 C. Questions about the collection ("how many Monets are on view?", "which gallery has the most
-   armor?"): use run_sql or search_objects, and answer with the numbers and source tags.
+   armor?"): use run_sql or search_objects (include object_id in queries that list objects), call
+   snapshot_info for the data's date, then write_answer with the results, and reply with its text.
 
 Always:
-- Every fact you state comes from a tool result. Cite [met:<id>] for objects and say "in the Met's
+- You never write facts yourself: the Writer does, from the evidence you pass it. You may write
+  only clarifying questions and "the data can't answer that" replies.
+- Every fact comes from a tool result. Cite [met:<id>] for objects and say "in the Met's
   on-view data as of <date from snapshot_info>" for counts.
 - Say plainly when the data cannot answer: crowds, opening hours, loans and special exhibitions
   (not in this data), objects not on view, what a label says beyond the record.
 - Keep replies short; visitors are standing in a museum.""",
     model=LEAD_MODEL,
     model_settings=SETTINGS,
-    tools=[research, plan_route, write_tour, find_by_accession, find_by_title, get_object, search_objects,
+    tools=[research, plan_route, write_tour, write_answer, find_by_accession, find_by_title, get_object, search_objects,
            gallery_summary, run_sql, snapshot_info, get_wikipedia],
 )
 
 
 async def chat(history: list, message: str | list) -> tuple[str, list[dict], list]:
-    """Run one visitor turn. Returns (reply, tool_calls, new history)."""
+    """Run one visitor turn. Returns (reply, tool_calls, new history).
+
+    If the Lead runs out of turns, the visitor gets an honest message and the tool calls so far,
+    instead of an error page.
+    """
     run = Run()
-    result = await Runner.run(lead, history + [{"role": "user", "content": message}], context=run, hooks=HOOKS,
-                              max_turns=LEAD_MAX_TURNS)
+    turn = history + [{"role": "user", "content": message}]
+    try:
+        result = await Runner.run(lead, turn, context=run, hooks=HOOKS, max_turns=LEAD_MAX_TURNS)
+    except MaxTurnsExceeded:
+        reply = ("I ran out of steps before finishing this one. Try narrowing it down (fewer themes, or one "
+                 "department), and I'll try again.")
+        return reply, run.tool_calls, turn + [{"role": "assistant", "content": reply}]
     return str(result.final_output), run.tool_calls, result.to_input_list()
