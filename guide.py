@@ -348,7 +348,8 @@ Budget: at most 4 tool calls.
    {"object_id": 123,
     "story": "80 to 120 words in plain language: what it is, the context that makes it make sense,
               and why it matters. Explain any term the visitor may not know, in a few words.",
-    "look_for": "one sentence on something to notice in front of the object",
+    "look_for": "what to notice in front of the object, as a phrase that follows 'Look for',
+                 e.g. 'the metal pins under the base, used to mount it'",
     "sources_read": ["Wikipedia titles you used"],
     "gaps": "what you could not find, or empty"}
 
