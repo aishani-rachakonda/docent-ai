@@ -325,7 +325,7 @@ Rules:
 - Every sentence that states a fact ends with its tag. Tag objects by the object_id in the evidence.
 - Counts and other results of a query (how many, which galleries) take one [data] tag instead of a
   tag per object, and say the date of the data, e.g. "in the Met's on-view data as of Nov 7, 2026".
-  Use csv_latest_metadata_date from snapshot_info as that date when it is in the evidence.
+  Use data_as_of from snapshot_info as that date.
 - Plain, warm, concrete language; no hype words ("stunning", "masterpiece", "famous", "testament",
   "vibrant", "incredible"). No bold labels inside sentences.""",
     model=WRITER_MODEL,

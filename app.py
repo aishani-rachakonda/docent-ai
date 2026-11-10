@@ -5,6 +5,7 @@ carries the agent that made it. A request may include a photo of a wall label.
 """
 
 import asyncio
+import os
 import threading
 import uuid
 from pathlib import Path
@@ -73,12 +74,15 @@ async def chat(request: ChatRequest):
 
 
 def _drop_images(message: dict) -> dict:
+    """Replace a user's label photo with a note. Leaves every other message untouched."""
     content = message.get("content") if isinstance(message, dict) else None
-    if isinstance(content, list):
-        kept = [c for c in content if not (isinstance(c, dict) and c.get("type") == "input_image")]
-        return {**message, "content": kept + [{"type": "input_text", "text": "[label photo, not kept]"}]}
-    return message
+    if not isinstance(content, list) or not any(isinstance(c, dict) and c.get("type") == "input_image" for c in content):
+        return message
+    kept = [c for c in content if not (isinstance(c, dict) and c.get("type") == "input_image")]
+    return {**message, "content": kept + [{"type": "input_text", "text": "[label photo, not kept]"}]}
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    # Cloud Run sets PORT and needs 0.0.0.0; locally it defaults to http://127.0.0.1:8010
+    port = int(os.environ.get("PORT", 8010))
+    uvicorn.run(app, host="0.0.0.0" if "PORT" in os.environ else "127.0.0.1", port=port)

@@ -33,9 +33,13 @@ def _rows(sql: str, params: list | None = None) -> list[dict]:
 
 def snapshot_info() -> dict:
     """When the data was built and how fresh the Met's own records are."""
-    info = {k: v for k, v in db().execute("SELECT key, value FROM build_info").fetchall()}
-    info["objects_on_view"] = db().execute("SELECT count(*) FROM objects").fetchone()[0]
-    return info
+    raw = {k: v for k, v in db().execute("SELECT key, value FROM build_info").fetchall()}
+    return {
+        # The date to quote: the newest change in the Met's own records, not when we built the file
+        "data_as_of": (raw.get("csv_latest_metadata_date") or "")[:10],
+        "snapshot_built": (raw.get("csv_built_at") or "")[:10],
+        "objects_on_view": db().execute("SELECT count(*) FROM objects").fetchone()[0],
+    }
 
 
 # --- Identify one object (the label reader) ---
