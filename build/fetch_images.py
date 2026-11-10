@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DB = ROOT / "data" / "met.duckdb"
 OUT = ROOT / "data" / "raw" / "images.jsonl"
 API = "https://collectionapi.metmuseum.org/public/collection/v1/objects/{}"
-HEADERS = {"User-Agent": "met-guide/0.1 (student course project; educational, non-commercial)"}
+HEADERS = {"User-Agent": "docent-ai/0.1 (student course project; educational, non-commercial)"}
 DELAY = 0.5  # seconds between requests: ~2 a second, far under the documented 80
 BACKOFF = [60, 300, 900, 1800]  # waits after a block (403/429), in seconds
 

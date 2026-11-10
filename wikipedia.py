@@ -14,7 +14,7 @@ MAX_CHARS = 6_000  # the intro and first sections: enough for a tour stop, small
 
 
 def _headers() -> dict:
-    return {"User-Agent": f"met-guide/0.1 ({os.environ.get('WIKI_CONTACT', '')}; student course project)"}
+    return {"User-Agent": f"docent-ai/0.1 ({os.environ.get('WIKI_CONTACT', '')}; student course project)"}
 
 
 @lru_cache(maxsize=512)

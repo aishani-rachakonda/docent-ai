@@ -1,4 +1,4 @@
-"""Met Guide: a museum companion for The Met, served with FastAPI.
+"""Docent AI: a museum companion for The Met, served with FastAPI.
 
 POST /chat keeps Project 1's shape: {response, session_id, tool_calls}, where each tool call
 carries the agent that made it. A request may include a photo of a wall label.
@@ -22,7 +22,7 @@ import guide  # noqa: E402  (reads model settings from the environment loaded ab
 import met_tools  # noqa: E402
 
 HERE = Path(__file__).parent
-app = FastAPI(title="Met Guide")
+app = FastAPI(title="Docent AI")
 
 # session_id -> conversation history. In memory, single process.
 sessions: dict[str, list] = {}

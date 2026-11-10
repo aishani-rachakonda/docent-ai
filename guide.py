@@ -27,16 +27,18 @@ set_tracing_disabled(True)
 
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT", "")
 LEAD_MODEL = LitellmModel(model=os.environ.get("LEAD_MODEL", "vertex_ai/gemini-3.5-flash"), api_key="unused")
-RESEARCH_MODEL = LitellmModel(model=os.environ.get("RESEARCH_MODEL", "vertex_ai/gemini-3.5-flash-lite"), api_key="unused")
+RESEARCH_MODEL = LitellmModel(model=os.environ.get("RESEARCH_MODEL", "vertex_ai/gemini-3.5-flash"), api_key="unused")
 WRITER_MODEL = LitellmModel(model=os.environ.get("WRITER_MODEL", "vertex_ai/gemini-3.5-flash"), api_key="unused")
 _extra = {"vertex_location": "global", "timeout": 90, "num_retries": 2}
 if PROJECT:
     _extra["vertex_project"] = PROJECT
 SETTINGS = ModelSettings(extra_args=_extra)
+# Researchers make many quick tool calls: little thinking keeps a tour fast. Lead and Writer think fully.
+RESEARCH_SETTINGS = ModelSettings(extra_args={**_extra, "reasoning_effort": os.environ.get("RESEARCH_EFFORT", "minimal")})
 
 MAX_RESEARCHERS = 5
 LEAD_MAX_TURNS = 20
-RESEARCHER_MAX_TURNS = 14
+RESEARCHER_MAX_TURNS = 8
 MET_API = "https://collectionapi.metmuseum.org/public/collection/v1/objects/{}"
 
 
@@ -222,7 +224,7 @@ async def _verify_live(ids: list[int]) -> dict[int, dict | None]:
     """Ask the Met API whether each object is still on view, a few at a time, failing soft."""
     out: dict[int, dict | None] = {}
     sem = asyncio.Semaphore(4)
-    headers = {"User-Agent": "met-guide/0.1 (student course project; educational, non-commercial)"}
+    headers = {"User-Agent": "docent-ai/0.1 (student course project; educational, non-commercial)"}
     async with httpx.AsyncClient(headers=headers, timeout=6) as client:
         async def one(oid: int):
             async with sem:
@@ -266,9 +268,20 @@ Budget: at most 6 tool calls, then reply. A short list of good candidates beats 
 Every fact must come from a tool result, with its source. Never invent objects, IDs or galleries.
 If the slice has nothing that fits, return an empty candidates list and say so in gaps.""",
     model=RESEARCH_MODEL,
-    model_settings=SETTINGS,
+    model_settings=RESEARCH_SETTINGS,
     tools=[search_objects, get_object, gallery_summary, run_sql, get_wikipedia],
 )
+
+
+async def _wrap_up_researcher(data) -> str:
+    """Out of steps: rather than lose the search, ask the same Researcher, with no tools left,
+    to answer from what it has already found."""
+    agent = data.run_data.last_agent.clone(tools=[])
+    history = data.run_data.history + data.run_data.output + [{
+        "role": "user", "content": "Your step budget is used up. Reply now with the JSON, using only "
+                                   "objects your tool results already showed. Put what you could not check in gaps."}]
+    result = await Runner.run(agent, history, context=data.context.context, max_turns=1)
+    return str(result.final_output)
 
 
 @function_tool
@@ -289,7 +302,8 @@ async def research(ctx: RunContextWrapper[Run], theme: str, slices: list[str], c
         agent = researcher.clone(name=f"Researcher {run.researchers}")
         prompt = f"Theme: {theme}\nYour slice: {slice_}\nReturn up to {candidates_per_slice} candidates."
         try:
-            result = await Runner.run(agent, prompt, context=run, hooks=HOOKS, max_turns=RESEARCHER_MAX_TURNS)
+            result = await Runner.run(agent, prompt, context=run, hooks=HOOKS, max_turns=RESEARCHER_MAX_TURNS,
+                                      error_handlers={"max_turns": _wrap_up_researcher})
             return {"slice": slice_, "agent": agent.name, "findings": str(result.final_output)}
         except MaxTurnsExceeded:
             return {"slice": slice_, "agent": agent.name,

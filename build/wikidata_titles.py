@@ -22,7 +22,7 @@ OUT = ROOT / "data" / "raw" / "wikidata.jsonl"
 API = "https://www.wikidata.org/w/api.php"
 # Wikimedia rejects (403) clients whose User-Agent has no contact URL or email.
 # Set WIKI_CONTACT to the project's repository URL.
-HEADERS = {"User-Agent": f"met-guide/0.1 ({os.environ.get('WIKI_CONTACT', '')}; student course project)"}
+HEADERS = {"User-Agent": f"docent-ai/0.1 ({os.environ.get('WIKI_CONTACT', '')}; student course project)"}
 BATCH = 50
 
 
