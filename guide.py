@@ -53,6 +53,7 @@ class Run:
         self.researchers = 0
         self.storytellers = 0
         self.research_rounds = 0
+        self.stories: dict[int, dict] = {}  # object_id -> the Storyteller's checked story
         self.found: dict[str, dict] = {}   # interest -> {"direct": n, "related": n}, over all rounds
         self.needs_more: dict | None = None  # set when the latest findings leave a gap
 
@@ -477,23 +478,37 @@ async def _tell(run: Run, object_id: int, context: str) -> dict:
     try:
         result = await Runner.run(agent, prompt, context=run, hooks=HOOKS, max_turns=STORYTELLER_MAX_TURNS,
                                   error_handlers={"max_turns": _wrap_up})
-        story = _parse_story(str(result.final_output))
+        story = _tag_look_for(_parse_story(str(result.final_output)), object_id)
         report = citations.check(story.get("story", "") + "\n" + story.get("look_for", ""), run.tool_calls)
         run.tool_calls.append({"agent": "Citation check", "name": "check_citations",
                                "args": {"object_id": object_id}, "result": _dump(report)})
         if not report["ok"]:
-            fix = ("A citation check of your story found problems. Fix them: read an article if a claim needs "
-                   "one, otherwise cut the claim; tag every fact. Reply with the full corrected JSON only.\n"
-                   + _dump(report))
+            fix = ("A citation check of your story found problems. Fix them. For details_not_in_cited_source: the "
+                   "listed names or numbers are not in the source that sentence cites, so tag the sentence with the "
+                   "source you actually read them in, or cut the detail if no source you read has it. For other "
+                   "problems: read an article if a claim needs one, otherwise cut the claim; tag every fact. "
+                   "Reply with the full corrected JSON only.\n" + _dump(report))
             result = await Runner.run(agent, result.to_input_list() + [{"role": "user", "content": fix}],
                                       context=run, hooks=HOOKS, max_turns=4, error_handlers={"max_turns": _wrap_up})
-            story = _parse_story(str(result.final_output)) or story
+            story = _tag_look_for(_parse_story(str(result.final_output)), object_id) or story
             report = citations.check(story.get("story", "") + "\n" + story.get("look_for", ""), run.tool_calls)
             run.tool_calls.append({"agent": "Citation check", "name": "check_citations",
                                    "args": {"object_id": object_id, "revised": True}, "result": _dump(report)})
-        return {**out, **story, "citations_ok": report["ok"]}
+        done = {**out, **story, "citations_ok": report["ok"]}
+        if story.get("story"):
+            run.stories[object_id] = done
+        return done
     except Exception as e:  # one story failing must not sink the tour
         return {**out, "error": f"{type(e).__name__}: {str(e)[:200]}"}
+
+
+def _tag_look_for(story: dict, object_id: int) -> dict:
+    """An untagged 'look for' line is about the object: tag it with the record before the citation
+    check, so a detail the record lacks is caught and fixed rather than tagged after the fact."""
+    look = story.get("look_for")
+    if isinstance(look, str) and look.strip() and not citations.TAG.search(look):
+        story["look_for"] = look.strip().rstrip(".") + f" [met:{object_id}]"
+    return story
 
 
 def _parse_story(text: str) -> dict:
@@ -503,7 +518,12 @@ def _parse_story(text: str) -> dict:
         d = json.loads(m.group(0)) if m else {}
     except ValueError:
         return {}
-    return d if isinstance(d, dict) else {}
+    if not isinstance(d, dict):
+        return {}
+    for key in ("story", "look_for"):  # "...wheat. [met:1]" -> "...wheat [met:1]." so each tag sits in its sentence
+        if isinstance(d.get(key), str):
+            d[key] = re.sub(r"([.!?])\s*(\[[^\]]+\](?:\s*\[[^\]]+\])*)", lambda m: " " + m.group(2) + m.group(1), d[key])
+    return d
 
 
 async def tell_stories(run: Run, object_ids: list[int], request: str, evidence_json: str) -> list[dict]:
@@ -604,7 +624,9 @@ async def _write(run: Run, prompt: str) -> str:
         return draft
     fix = (f"{prompt}\n\nYour draft:\n{draft}\n\nA citation check found problems. Fix them: add a tag to each "
            "uncited sentence if the evidence supports it, otherwise cut the sentence; remove or correct unknown "
-           f"sources. Reply with the full corrected text only.\n{_dump(report)}")
+           "sources; where details_not_in_cited_source lists names or numbers, tag that sentence with the source "
+           "in the evidence that actually contains them, or cut them. Reply with the full corrected text only."
+           f"\n{_dump(report)}")
     result = await Runner.run(writer, fix, context=run, hooks=HOOKS, max_turns=2)
     final = _fix_tags(str(result.final_output))
     run.tool_calls.append({"agent": "Citation check", "name": "check_citations", "args": {"draft": final[:500]},
@@ -704,7 +726,23 @@ async def write_answer(ctx: RunContextWrapper[Run], question: str, evidence_json
         question: The visitor's question, plus anything you need to tell them (e.g. a number was misread).
         evidence_json: The tool results the answer rests on, as JSON. Include object_id on every object.
     """
-    return await _write(ctx.context, f"Visitor question: {question}\n\nEvidence:\n{evidence_json}")
+    run = ctx.context
+    if not run.stories:
+        return await _write(run, f"Visitor question: {question}\n\nEvidence:\n{evidence_json}")
+    # A Storyteller's story goes in word for word, as in a tour: the Writer writes what goes around it
+    marks = {f"<<STORY:{oid}>>": st for oid, st in run.stories.items()}
+    text = await _write(run, f"Visitor question: {question}\n\nEvidence:\n{evidence_json}\n\nThese objects' stories are "
+                             f"already written and checked: {_dump({m: st.get('title') for m, st in marks.items()})}. Put "
+                             "each marker on its own line where that story belongs, and do not retell the story; "
+                             "write only the rest of the answer (the identification note, what is nearby, anything "
+                             "else asked).")
+    for mark, st in marks.items():
+        block = st["story"].strip()
+        if st.get("look_for"):
+            look = re.sub(r"^(look for|notice)\s*:?\s*", "", st["look_for"].strip(), flags=re.I)
+            block += f"\n\nLook for: {look}" + ("" if "[met:" in look else f" [met:{st['object_id']}]")
+        text = text.replace(mark, block) if mark in text else block + "\n\n" + text
+    return text
 
 
 # --- Lead ---

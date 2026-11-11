@@ -89,9 +89,14 @@ def find_by_accession(accession: str, title_hint: str = "", artist_hint: str = "
     if hints:
         confirmed = [r for r in near if agrees(r)]
         if len(confirmed) == 1:
-            return {"status": "near_confirmed", "matches": confirmed,
-                    "note": f"'{acc}' is one character off from {confirmed[0]['accession_number']}, and the title/artist on the label agree."
-                            + (f" ('{acc}' itself is a different object: {mismatch[0]['title']}.)" if mismatch else "")}
+            out = {"status": "near_confirmed", "matches": confirmed,
+                   "note": f"'{acc}' is one character off from {confirmed[0]['accession_number']}, and the title/artist on the label agree."}
+            if mismatch:  # name the other object with its ID, so an answer can cite it correctly
+                other = mismatch[0]
+                out["other_object"] = other
+                out["note"] += (f" ('{acc}' itself is a different object: {other['title']}, object_id {other['object_id']}, "
+                                f"gallery {other['gallery']}.)")
+            return out
     if mismatch:
         return {"status": "mismatch", "matches": mismatch + near,
                 "note": f"'{acc}' exists, but it is '{mismatch[0]['title']}', which does not match the label's "
