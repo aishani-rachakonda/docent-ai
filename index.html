@@ -710,7 +710,8 @@ function speakable(node, skip = "") {
   const c = node.cloneNode(true);
   c.querySelectorAll(".cite, button, .answer-tools, .actions" + (skip ? ", " + skip : "")).forEach(x => x.remove());
   c.querySelectorAll("p, li, h1, h2, h3, div").forEach(x => x.append(". "));
-  return c.textContent.replace(/\s+/g, " ").replace(/(\.\s*){2,}/g, ". ").replace(/\s+([.,;:])/g, "$1").trim();
+  return c.textContent.replace(/\s+/g, " ").replace(/\s+([.,;:])/g, "$1").replace(/[,;:]+\./g, ".")
+    .replace(/(\.\s*){2,}/g, ". ").trim();
 }
 
 // --- Audio: a natural voice from the server (/speak), a sentence or two at a time, fetched ahead

@@ -17,7 +17,7 @@ import google.auth
 import google.auth.transport.requests
 import httpx
 
-MODEL = os.environ.get("TTS_MODEL", "gemini-2.5-flash-tts")
+MODEL = os.environ.get("TTS_MODEL", "gemini-3.1-flash-tts-preview")
 VOICE = os.environ.get("TTS_VOICE", "Charon")
 STYLE = "Read this as a warm, unhurried museum docent speaking to one curious visitor, with natural pauses:\n\n"
 MAX_CHARS = 1200
