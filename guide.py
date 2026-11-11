@@ -12,6 +12,7 @@ plan_route        is code, not a model: it orders stops by walking distance.
 import asyncio
 import json
 import os
+import re
 
 import httpx
 from agents import Agent, ModelSettings, RunContextWrapper, RunHooks, Runner, function_tool, set_tracing_disabled
@@ -336,39 +337,58 @@ async def research(ctx: RunContextWrapper[Run], theme: str, slices: list[str], c
 
 # --- Storyteller ---
 
-STORYTELLER_MAX_TURNS = 6
+STORYTELLER_MAX_TURNS = 9
 
 storyteller = Agent(
     name="Storyteller",
     instructions="""\
-You tell the story of one object at The Met to a visitor who is curious but not an expert: they
-don't know the periods, techniques or terms, and want to understand what they are looking at and
-why it matters. You get the object's Met record and anything a Researcher already found.
+You tell the story of one object at The Met to a visitor who is curious but not an expert. They
+may not know who the Buddha was, what the Ptolemaic period was, or what "barding" means, and they
+want to understand what they are looking at and why it matters. You get the object's Met record and
+anything a Researcher already found.
 
-Budget: at most 4 tool calls.
+First, plan your reading. List to yourself the names and terms in the record that a newcomer would
+not know: people and gods (Siddhartha, Bastet), religions and stories (Buddhism, the Great
+Departure), periods and dynasties (Ikshvaku, Qing), places, materials and techniques (Egyptian
+blue, sancai), and object types (ostracon, ewer).
+
+Then read, at most 6 tool calls in all; make several calls at once when you can:
 1. If the record has object_wikipedia or artist_wikipedia, read that article with get_wikipedia.
-2. Find one or two background articles that explain the context a non-expert is missing: the
-   culture or period (e.g. 'Ptolemaic Kingdom'), the material or technique (e.g. 'Sancai'), or the
-   subject (e.g. 'Cats in ancient Egypt'). Use search_wikipedia with words from the record, then
-   read the best match with get_wikipedia. Use an article only if it is clearly about this object's
-   own culture, period, material, maker or subject; skip it otherwise.
-3. Reply with JSON only, no prose:
+2. Read the background a newcomer most needs: what the piece is about (its story, religion or
+   subject) and the most important unfamiliar terms from your list. Use search_wikipedia with
+   words from the record, then read the best match with get_wikipedia. Use an article only if it is
+   clearly about this object's own subject, culture, period, material, maker or type.
+   Do not search for this object itself (its accession number, credit line or exact title): unless
+   the record names an object_wikipedia article, Wikipedia has no page about it.
+
+Then reply with JSON only, no prose:
    {"object_id": 123,
-    "story": "80 to 120 words in plain language: what it is, the context that makes it make sense,
-              and why it matters. Explain any term the visitor may not know, in a few words.",
+    "story": "180 to 250 words, in this order:
+              1. Orientation: one or two sentences on what this piece is about, in plain words, before
+                 any detail (e.g. 'This panel tells a story from the life of the Buddha, the teacher
+                 whose ideas became Buddhism.').
+              2. What the object is: material, maker or culture, date.
+              3. The context that makes it make sense, explaining every name and term a newcomer
+                 would not know the first time it appears, in a short clause (e.g. 'the Ikshvaku
+                 dynasty, which ruled this part of southeast India in the 3rd century, when Buddhism
+                 flourished there').
+              4. Why it matters, or what makes it unusual.",
     "look_for": "what to notice in front of the object, as a phrase that follows 'Look for',
                  e.g. 'the metal pins under the base, used to mount it'",
     "sources_read": ["Wikipedia titles you used"],
+    "unexplained": "terms you could not find a source to explain, or empty",
     "gaps": "what you could not find, or empty"}
 
 Rules:
 - Every fact comes from the record or an article you read in this task. Your own knowledge does not
-  count: if neither says it, leave it out, however well known it is. A background article supports
-  general context (what the Ptolemaic period was), never a claim about this particular object that
-  the record does not make.
+  count: if neither says it, leave it out, however well known it is. That includes explanations: if
+  you could not read about a term, use plainer words instead of the term, or leave it out, and list
+  it in unexplained. A background article supports general context (what the Ptolemaic period was),
+  never a claim about this particular object that the record does not make.
 - End each sentence that states a fact with its tag: [met:<object_id>] for the record,
   [wikipedia:<Exact Article Title>] for an article.
 - look_for must describe only what the record says the object is or shows.
+- Spoken aloud too: short sentences, no lists, no parentheses.
 - Warm and concrete, like a good docent; no hype words ("stunning", "masterpiece", "famous",
   "testament", "vibrant", "incredible").""",
     model=WRITER_MODEL,
@@ -384,13 +404,42 @@ async def _tell(run: Run, object_id: int, context: str) -> dict:
         return {"object_id": object_id, "error": record["error"]}
     run.storytellers += 1
     agent = storyteller.clone(name=f"Storyteller {run.storytellers}")
+    # The Storyteller reads the record it is given: log it like any other lookup, so its citations check out
+    run.tool_calls.append({"agent": agent.name, "name": "get_object", "args": {"object_id": object_id},
+                           "result": _dump(record)[:4000]})
     prompt = f"{context}\n\nMet record:\n{_dump(record)}"
+    out = {"object_id": object_id, "agent": agent.name, "title": record.get("title"),
+           "maker": record.get("artist") or record.get("culture") or (record.get("department") or "").removesuffix(" Art"), "date": record.get("object_date") or ""}
     try:
         result = await Runner.run(agent, prompt, context=run, hooks=HOOKS, max_turns=STORYTELLER_MAX_TURNS,
                                   error_handlers={"max_turns": _wrap_up})
-        return {"object_id": object_id, "agent": agent.name, "story": str(result.final_output)}
+        story = _parse_story(str(result.final_output))
+        report = citations.check(story.get("story", "") + "\n" + story.get("look_for", ""), run.tool_calls)
+        run.tool_calls.append({"agent": "Citation check", "name": "check_citations",
+                               "args": {"object_id": object_id}, "result": _dump(report)})
+        if not report["ok"]:
+            fix = ("A citation check of your story found problems. Fix them: read an article if a claim needs "
+                   "one, otherwise cut the claim; tag every fact. Reply with the full corrected JSON only.\n"
+                   + _dump(report))
+            result = await Runner.run(agent, result.to_input_list() + [{"role": "user", "content": fix}],
+                                      context=run, hooks=HOOKS, max_turns=4, error_handlers={"max_turns": _wrap_up})
+            story = _parse_story(str(result.final_output)) or story
+            report = citations.check(story.get("story", "") + "\n" + story.get("look_for", ""), run.tool_calls)
+            run.tool_calls.append({"agent": "Citation check", "name": "check_citations",
+                                   "args": {"object_id": object_id, "revised": True}, "result": _dump(report)})
+        return {**out, **story, "citations_ok": report["ok"]}
     except Exception as e:  # one story failing must not sink the tour
-        return {"object_id": object_id, "agent": agent.name, "error": f"{type(e).__name__}: {str(e)[:200]}"}
+        return {**out, "error": f"{type(e).__name__}: {str(e)[:200]}"}
+
+
+def _parse_story(text: str) -> dict:
+    """The Storyteller's JSON reply, tolerating code fences; {} if it is not JSON."""
+    m = re.search(r"\{.*\}", text, re.S)
+    try:
+        d = json.loads(m.group(0)) if m else {}
+    except ValueError:
+        return {}
+    return d if isinstance(d, dict) else {}
 
 
 async def tell_stories(run: Run, object_ids: list[int], request: str, evidence_json: str) -> list[dict]:
@@ -447,22 +496,18 @@ You write the visitor-facing text for a museum guide at The Met, from the eviden
 and nothing else. Visitors are curious but not experts: plain words, and a few words of explanation
 for any term they may not know.
 
-For a tour: a title, one or two sentences on the thread connecting the stops, then each stop in
-the given order as:
-### <n>. <Title> — Gallery <number>
-*<artist or culture>, <date>* · about <minutes> min in
-The stop's story from its Storyteller, kept close to as written with its source tags (you may trim
-it, join it to the tour's thread in a few words, or drop a sentence; never add facts). Then a line
-"Look for: ..." from the Storyteller's look_for. If a stop has no story, write two or three sentences
-from the Researcher's evidence. End each sentence that states a fact with its source tag:
-[met:<object_id>] or [wikipedia:<Article Title>].
-After the main stops, if the route has extras: a heading "## Extras, if you have time", then each
-extra in the given order, numbered on from the main stops (after stop 6 comes 7), in the same
-format as a main stop: they continue the same walk.
-Then a short "Before you go" list with the route notes you were given (approximate walking times,
-removed stops, optional stops), and anything the data could not tell you.
+For a tour, you write only its frame; the stops are laid out in code from the Storytellers'
+stories. Write exactly:
+## <a title for the tour>
+<one to three sentences on the thread connecting the stops, from the stories, with tags>
+<<STOPS>>
+### Before you go
+<a short list: the route notes you were given (approximate walking times, removed stops, extras
+left out), and what the data could not tell you>
+Keep the line <<STOPS>> exactly as written, on its own line.
 
-For a single object or a question: a short, direct answer with source tags on every fact.
+For a single object: its Storyteller's story whole, then the rest of the answer (what is nearby,
+anything the visitor asked). For a question: a short, direct answer. Source tags on every fact.
 
 Rules:
 - Use only facts in the evidence. Your own knowledge of art history does not count as evidence:
@@ -478,10 +523,15 @@ Rules:
 )
 
 
+def _fix_tags(text: str) -> str:
+    """A bare object number in brackets, [544118], is a Met citation: write it as [met:544118]."""
+    return re.sub(r"\[(\d{3,})\]", r"[met:\1]", text)
+
+
 async def _write(run: Run, prompt: str) -> str:
     """Have the Writer draft, check its citations in code, and let it revise once if they fail."""
     result = await Runner.run(writer, prompt, context=run, hooks=HOOKS, max_turns=2)
-    draft = str(result.final_output)
+    draft = _fix_tags(str(result.final_output))
     report = citations.check(draft, run.tool_calls)
     run.tool_calls.append({"agent": "Citation check", "name": "check_citations", "args": {"draft": draft[:500]},
                            "result": _dump(report)})
@@ -491,7 +541,7 @@ async def _write(run: Run, prompt: str) -> str:
            "uncited sentence if the evidence supports it, otherwise cut the sentence; remove or correct unknown "
            f"sources. Reply with the full corrected text only.\n{_dump(report)}")
     result = await Runner.run(writer, fix, context=run, hooks=HOOKS, max_turns=2)
-    final = str(result.final_output)
+    final = _fix_tags(str(result.final_output))
     run.tool_calls.append({"agent": "Citation check", "name": "check_citations", "args": {"draft": final[:500]},
                            "result": _dump(citations.check(final, run.tool_calls))})
     return final
@@ -500,8 +550,8 @@ async def _write(run: Run, prompt: str) -> str:
 @function_tool
 async def write_tour(ctx: RunContextWrapper[Run], request: str, route_json: str, evidence_json: str) -> str:
     """Write the final tour: a Storyteller per stop (in parallel) explains each object in plain
-    language with Wikipedia background, then the Writer assembles the tour. Returns the tour text:
-    reply with it as it is.
+    language with Wikipedia background; the stops are laid out in walking order, and the Writer adds
+    the title, introduction and closing notes. Returns the tour text: reply with it as it is.
 
     Args:
         request: The visitor's request and constraints.
@@ -509,14 +559,60 @@ async def write_tour(ctx: RunContextWrapper[Run], request: str, route_json: str,
         evidence_json: The candidates and evidence for the chosen stops (from research), as JSON.
     """
     run = ctx.context
+    route_data: dict = {}
     try:
         route_data = json.loads(route_json)
         stops = [s["object_id"] for key in ("stops", "extras", "cloisters_stops") for s in route_data.get(key, [])]
     except (ValueError, KeyError, TypeError, AttributeError):
         stops = [int(c["object_id"]) for c in _candidates(evidence_json) if str(c.get("object_id")).isdigit()]
     stories = await tell_stories(run, list(dict.fromkeys(stops)), request, evidence_json)
-    return await _write(run, f"Visitor request: {request}\n\nRoute (in walking order):\n{route_json}"
-                             f"\n\nStories, one per stop:\n{_dump(stories)}\n\nResearchers' evidence:\n{evidence_json}")
+    by_id = {s["object_id"]: s for s in stories}
+    if not isinstance(route_data, dict):
+        route_data = {}
+    frame = await _write(run, f"Write the tour's frame.\n\nVisitor request: {request}\n\nRoute (in walking order):\n"
+                              f"{route_json}\n\nStories, one per stop:\n{_dump(stories)}")
+    body = _assemble(route_data, by_id, evidence_json)
+    if STOPS_MARK in frame:
+        return frame.replace(STOPS_MARK, body)
+    return frame.rstrip() + "\n\n" + body
+
+
+STOPS_MARK = "<<STOPS>>"
+
+
+def _assemble(route_data: dict, stories: dict, evidence_json: str) -> str:
+    """The stops, in walking order, written out from their stories: no model in between."""
+    evidence = {str(c.get("object_id")): c for c in _candidates(evidence_json)}
+
+    def stop(n, s: dict) -> str:
+        st = stories.get(s["object_id"], {})
+        maker = ", ".join(x for x in (st.get("maker") or s.get("artist") or "", st.get("date") or "") if x)
+        when = f" · about {s['arrive_after_minutes']} min in" if s.get("arrive_after_minutes") is not None else ""
+        story = (st.get("story") or "").strip()
+        if not story:  # no story: fall back on the Researcher's evidence, with its sources
+            facts = (evidence.get(str(s["object_id"])) or {}).get("evidence") or []
+            story = " ".join(f"{f.get('fact', '').rstrip('.')}. [{f.get('source', '')}]" for f in facts if f.get("fact"))
+            story = story or f"The Met's record has the details. [met:{s['object_id']}]"
+        look = (st.get("look_for") or "").strip()
+        look = re.sub(r"^(look for|notice)\s*:?\s*", "", look, flags=re.I)
+        text = f"### {n}. {s.get('title') or st.get('title')} — Gallery {s.get('gallery')}\n"
+        text += (f"*{maker}*{when}\n\n" if maker else (f"*{when.strip(' ·')}*\n\n" if when else "\n"))
+        text += story + "\n"
+        if look:
+            text += f"\nLook for: {look}" + ("" if "[met:" in look else f" [met:{s['object_id']}]") + "\n"
+        return text
+
+    main = route_data.get("stops", [])
+    parts = [stop(i + 1, s) for i, s in enumerate(main)]
+    extras = route_data.get("extras", [])
+    if extras:
+        parts.append("## Extras, if you have time\n")
+        parts += [stop(len(main) + i + 1, s) for i, s in enumerate(extras)]
+    cloisters = route_data.get("cloisters_stops", [])
+    if cloisters:
+        parts.append("## At The Met Cloisters\n")
+        parts += [stop(f"C{i + 1}", s) for i, s in enumerate(cloisters)]
+    return "\n".join(parts).strip()
 
 
 @function_tool
