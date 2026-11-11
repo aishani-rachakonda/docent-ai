@@ -62,12 +62,12 @@ body.started header h1::after { margin-top: 14px; }
 /* Conversation: a printed guide, not chat bubbles */
 #thread { padding: 24px 0 170px; display: flex; flex-direction: column; }
 .msg { max-width: 100%; }
-.msg.user { padding: 34px 0 6px; border-top: 1px solid var(--rule); font-style: italic; font-size: 21px;
-  color: var(--ink-2); text-align: center; }
-.msg.user:first-child { border-top: 0; }
-.msg.user::before { content: "Your request"; display: block; font-style: normal; font-size: 15px; color: var(--accent);
-  font-variant-caps: all-small-caps; letter-spacing: .14em; margin-bottom: 4px; }
-.msg.user img { display: block; max-width: 220px; margin: 6px auto; border: 1px solid var(--line); padding: 6px; background: var(--frame); }
+.msg.user { align-self: flex-end; max-width: min(80%, 560px); margin: 30px 0 6px; padding: 12px 18px 13px;
+  background: var(--surface); border: 1px solid var(--rule); border-right: 3px solid var(--accent);
+  font-size: 19px; line-height: 1.5; color: var(--ink); }
+.msg.user::before { content: "You"; display: block; font-size: 14px; color: var(--accent);
+  font-variant-caps: all-small-caps; letter-spacing: .14em; margin-bottom: 2px; }
+.msg.user img { display: block; max-width: 220px; margin: 6px 0; border: 1px solid var(--line); padding: 6px; background: var(--frame); }
 .msg.guide { padding: 14px 0 34px; }
 .msg.guide h1, .msg.guide h2 { font-size: 32px; margin: 12px 0 12px; text-align: center; }
 .msg.guide h3 { font-size: 22px; margin: 26px 0 4px; }
@@ -212,6 +212,8 @@ details.work summary { cursor: pointer; font-size: 16px; color: var(--ink-2); }
 .overview { margin: 26px 0 8px; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--rule); }
 .ov-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px 0; }
 .ov-sum { font-size: 18px; color: var(--ink); }
+.ov-when { display: flex; align-items: center; gap: 5px; font-size: 15px; color: var(--ok); margin-top: 2px; }
+.ov-when::before { content: "\2713"; }
 .ov-label { display: block; font-size: 15px; color: var(--accent); font-variant-caps: all-small-caps; letter-spacing: .14em; }
 .ov-list { list-style: none; margin: 0; padding: 0 0 6px; }
 .ov-list a { display: grid; grid-template-columns: 34px 1fr auto; gap: 10px; align-items: baseline; padding: 9px 4px;
@@ -226,6 +228,7 @@ details.work summary { cursor: pointer; font-size: 16px; color: var(--ink-2); }
 
 /* Before you go: folded */
 details.notes { margin: 30px 0 0; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); padding: 0; }
+.overview + details.notes { margin: 0 0 8px; border-top: 0; }
 details.notes summary { cursor: pointer; padding: 12px 0; font-size: 17px; color: var(--ink); list-style: none; }
 details.notes summary::-webkit-details-marker { display: none; }
 details.notes summary::after { content: " \25B8"; color: var(--accent); }
@@ -395,7 +398,7 @@ function citeLinks(md) {
       if (kind === "wikipedia" && ref)
         return ` <a class="cite" href="https://en.wikipedia.org/wiki/${encodeURIComponent(ref.replace(/ /g, "_"))}" target="_blank" rel="noopener" title="Wikipedia: ${ref.replace(/"/g, "&quot;")}">Wikipedia</a>`;
       if (kind === "data")
-        return ' <span class="cite" title="Counted from the on-view snapshot of the Met\'s Open Access data">data</span>';
+        return ' <span class="cite" title="From The Met\'s Open Access collection data">data</span>';
       return "";
     }).join(""));
 }
@@ -422,7 +425,10 @@ function renderGuide(data) {
   const cards = route ? buildCards(body, route) : [];
   foldNotes(body);
   if (cards.length) {
-    body.querySelector(".card").before(tourBar(route, cards));
+    const overview = tourBar(route, cards);
+    body.querySelector(".card").before(overview);
+    const notes = body.querySelector("details.notes");
+    if (notes) overview.after(notes);
   } else if (Speech.ok && (data.response || "").length > 120) {
     const tools = el("div", "answer-tools");
     tools.appendChild(listenButton(() => [speakable(body)], body, "Listen"));
@@ -450,7 +456,7 @@ function buildCards(body, route) {
     const ids = section.flatMap(n => n.querySelectorAll ? [...n.querySelectorAll("a.cite")] : [])
       .map(a => (a.href.match(/search\/(\d+)/) || [])[1]).filter(Boolean);
     const stop = byId[ids.find(id => byId[id])] || (/^\d+$/.test(m[1]) ? (route.stops || [])[+m[1] - 1] : null) || {};
-    const card = makeCard(m[1], m[2], m[3], stop, section);
+    const card = makeCard(m[1], m[2], m[3], { ...stop, checked_at: route.checked_at }, section);
     h.replaceWith(card);
     cards.push(card);
   });
@@ -520,7 +526,7 @@ function makeCard(n, rawTitle, gallery, stop, section) {
   if (bits.length) { const d = el("span", "way-bits"); d.textContent = bits.join(" · "); way.appendChild(d); }
   const flags = el("span", "way-flags");
   if (stop.live_check === "on_view") {
-    const f = el("span", "flag live"); f.innerHTML = ICON.check; f.title = "Checked against the Met's live data just now";
+    const f = el("span", "flag live"); f.innerHTML = ICON.check; f.title = route_checked(stop.checked_at) || "Checked with The Met's live data";
     f.appendChild(document.createTextNode("On view")); flags.appendChild(f);
   }
   if (stop.moved_from) { const f = el("span", "flag moved"); f.textContent = `Moved from ${stop.moved_from}`; flags.appendChild(f); }
@@ -528,13 +534,7 @@ function makeCard(n, rawTitle, gallery, stop, section) {
   if (flags.childNodes.length) way.appendChild(flags);
   content.appendChild(way);
 
-  if (Speech.ok) {
-    const actions = el("div", "actions");
-    actions.appendChild(listenButton(() => [cardSpeech(card, n)], card, "Listen to this stop", "stop-listen"));
-    content.appendChild(actions);
-  }
-
-  // What to notice first, then the story
+  // What to notice, then the Listen button, then the story
   const story = el("div", "story");
   let look = null;
   section.forEach(nd => {
@@ -555,6 +555,11 @@ function makeCard(n, rawTitle, gallery, stop, section) {
     story.appendChild(nd);
   });
   if (look) content.appendChild(look);
+  if (Speech.ok) {
+    const actions = el("div", "actions");
+    actions.appendChild(listenButton(() => [cardSpeech(card, n)], card, "Listen to this stop", "stop-listen"));
+    content.appendChild(actions);
+  }
   if (story.childNodes.length) {
     const wrap = el("div", "story-wrap");
     const head = el("div", "story-head"); head.textContent = "The story";
@@ -563,6 +568,15 @@ function makeCard(n, rawTitle, gallery, stop, section) {
   }
   card.append(photo, content);
   return card;
+}
+
+// "Stops checked live with The Met at 4:12 PM, Nov 11", in the visitor's own time zone
+function route_checked(iso) {
+  const d = iso ? new Date(iso) : null;
+  if (!d || isNaN(d)) return "";
+  const time = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  const day = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return `Stops checked live with The Met at ${time}, ${day}`;
 }
 
 // The whole walk at a glance: every stop, its gallery and when you reach it; tap one to jump there
@@ -575,6 +589,8 @@ function tourBar(route, cards) {
   sum.innerHTML = `<span class="ov-label">Your tour</span>`;
   sum.appendChild(document.createTextNode(`${main.length} stops · about ${route.total_minutes} min` +
     (extras.length ? ` · ${extras.length} extra${extras.length > 1 ? "s" : ""} if you have time` : "")));
+  const when = route_checked(route.checked_at);
+  if (when) { const w = el("span", "ov-when"); w.textContent = when; sum.appendChild(w); }
   top.appendChild(sum);
   if (Speech.ok) top.appendChild(listenButton(() => main.map((c, i) => ({ text: cardSpeech(c, i + 1), card: c })),
                                               null, "Play the whole tour", "primary"));

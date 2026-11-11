@@ -13,6 +13,7 @@ import asyncio
 import json
 import os
 import re
+from datetime import datetime, timezone
 
 import httpx
 from agents import Agent, ModelSettings, RunContextWrapper, RunHooks, Runner, function_tool, set_tracing_disabled
@@ -253,6 +254,7 @@ async def plan_route(ctx: RunContextWrapper[Run], object_ids: list[int], extra_i
         result["notes"].append(f"Not in the on-view snapshot, so left out: {missing}")
     if any(s.get("live_check") == "unavailable" for s in keep):
         result["notes"].append("The Met's live API did not answer for some stops; their galleries come from the snapshot.")
+    result["checked_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")  # when the live check ran
     if result.get("stops") or result.get("extras"):
         run.route = result
     return _dump(result)
@@ -594,8 +596,9 @@ stories. Write exactly:
 <one to three sentences on the thread connecting the stops, from the stories, with tags>
 <<STOPS>>
 ### Before you go
-<a short list: the route notes you were given (approximate walking times, removed stops, extras
-left out), and what the data could not tell you>
+<a short list (one to three items) of what the data could not tell you about these stops or this
+request. Nothing about the route, timing or which stops are in or out: the route notes are added
+in code, word for word from the route planner.>
 Keep the line <<STOPS>> exactly as written, on its own line.
 
 For a single object: its Storyteller's story whole, then the rest of the answer (what is nearby,
@@ -606,8 +609,9 @@ Rules:
   if the evidence does not say it, leave it out, however well known it is.
 - Every sentence that states a fact ends with its tag. Tag objects by the object_id in the evidence.
 - Counts and other results of a query (how many, which galleries) take one [data] tag instead of a
-  tag per object, and say the date of the data, e.g. "in the Met's on-view data as of Nov 7, 2026".
-  Use data_as_of from snapshot_info as that date.
+  tag per object, and say the date of the data, e.g. "in The Met's collection data of Nov 7, 2026".
+  Use data_as_of from snapshot_info as that date. Never say "today" or "currently" for such
+  results: they come from that data file, not a live check.
 - Plain, warm, concrete language; no hype words ("stunning", "masterpiece", "famous", "testament",
   "vibrant", "incredible"). No bold labels inside sentences.""",
     model=WRITER_MODEL,
@@ -676,13 +680,24 @@ async def write_tour(ctx: RunContextWrapper[Run], request: str, route_json: str,
                "sentence must say so plainly, and that this tour uses the closest things the collection has. "
                "Cite it with [data].")
     as_of = met_tools.snapshot_info().get("data_as_of", "")
-    missing += f"\n\nThe on-view data is as of {as_of}: use this date if you mention one, never another."
-    frame = await _write(run, f"Write the tour's frame.\n\nVisitor request: {request}\n\nRoute (in walking order):\n"
-                              f"{route_json}\n\nStories, one per stop:\n{_dump(stories)}{missing}")
+    try:  # 2026-11-07 -> Nov 7, 2026
+        as_of = datetime.strptime(as_of, "%Y-%m-%d").strftime("%b %-d, %Y")
+    except ValueError:
+        pass
+    missing += (f"\n\nSearches and counts come from The Met's collection data of {as_of}; if you mention that, say "
+                f"\"The Met's collection data of <that date, e.g. Nov 7, 2026>\" and never another date. The stops "
+                "themselves were checked live with The Met when the route was planned; the page shows that time, so "
+                "do not repeat it.")
+    # The Writer sees the planner's own route, without its notes: those go in below, as written
+    route_view = {k: v for k, v in route_data.items() if k != "notes"}
+    frame = await _write(run, f"Write the tour's frame.\n\nVisitor request: {request}\n\nRoute (in walking order; "
+                              f"\"extras\" are in the tour, after the main stops):\n{_dump(route_view)}\n\n"
+                              f"Stories, one per stop:\n{_dump(stories)}{missing}")
+    frame = _add_route_notes(frame, route_data.get("notes") or [])
     said = [i for i in unmet if re.search(re.escape(i.rstrip("s")), frame, re.I)]
     if len(said) < len(unmet):  # the Writer did not say it: say it in code
         lacking = ", ".join(i for i in unmet if i not in said)
-        note = (f"The Met has nothing on view that directly matches {lacking} (in its data as of {as_of}), so this "
+        note = (f"The Met has nothing on view that directly matches {lacking} (in its collection data of {as_of}), so this "
                 f"tour uses the closest things in the collection. [data]")
         frame = re.sub(r"^(##[^\n]*\n)", lambda m: m.group(1) + "\n" + note + "\n", frame, count=1) \
             if frame.lstrip().startswith("##") else note + "\n\n" + frame
@@ -693,6 +708,17 @@ async def write_tour(ctx: RunContextWrapper[Run], request: str, route_json: str,
 
 
 STOPS_MARK = "<<STOPS>>"
+
+
+def _add_route_notes(frame: str, notes: list[str]) -> str:
+    """Put the route planner's notes at the top of "Before you go", word for word (object IDs dropped)."""
+    if not notes:
+        return frame
+    lines = "\n".join("- " + re.sub(r"\((\d{4,}), (gallery [^)]+)\)", r"(\2)", n).strip() for n in notes)
+    head = re.search(r"^#{2,3}\s*before you go\s*$", frame, re.I | re.M)
+    if head:
+        return frame[:head.end()] + "\n" + lines + frame[head.end():]
+    return frame.rstrip() + "\n\n### Before you go\n" + lines + "\n"
 
 
 def _assemble(route_data: dict, stories: dict, evidence_json: str) -> str:
@@ -805,8 +831,8 @@ C. Questions about the collection ("how many Monets are on view?", "which galler
 Always:
 - You never write facts yourself: the Writer does, from the evidence you pass it. You may write
   only clarifying questions and "the data can't answer that" replies.
-- Every fact comes from a tool result. Cite [met:<id>] for objects and say "in the Met's
-  on-view data as of <date from snapshot_info>" for counts.
+- Every fact comes from a tool result. Cite [met:<id>] for objects and say "in The Met's
+  collection data of <date from snapshot_info>" for counts.
 - Say plainly when the data cannot answer: crowds, opening hours, loans and special exhibitions
   (not in this data), objects not on view, what a label says beyond the record.
 - Keep replies short; visitors are standing in a museum.""",

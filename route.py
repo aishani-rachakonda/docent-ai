@@ -99,26 +99,28 @@ def plan(stops: list[dict], start_gallery: str = "", minutes_per_stop: float = 6
     extras = [s for s in extras if not is_cloisters(s["gallery"])]
     route, minutes = _walk(main, start, minutes_per_stop, order=_order_ending_near(main, extras, start))
 
-    notes = ["Walking times come from an approximate model of the building (gallery numbers grouped "
-             "into wings and floors), not from a real floor plan."]
+    notes = ["Walking times are estimates from a simple model of the building (galleries grouped into wings "
+             "and floors), not a real floor plan."]
     extra_stops: list[dict] = []
     if budget_minutes is not None and minutes > budget_minutes and not extras and len(route) > 1:
         fit = [r for r in route if r["arrive_after_minutes"] + minutes_per_stop <= budget_minutes] or route[:1]
         extra_stops = [{**r, "extra": True} for r in route[len(fit):]]
         route = fit
         minutes = route[-1]["arrive_after_minutes"] + minutes_per_stop
-        notes.append(f"{len(route)} stops fit in {budget_minutes:.0f} min; the rest continue the walk as extras.")
+        notes.append(f"{len(route)} stops fit in your {budget_minutes:.0f} min; the rest follow as extras, if you have time.")
     else:
         if budget_minutes is not None and minutes > budget_minutes:
-            notes.append(f"The main route takes about {minutes:.0f} min, over the {budget_minutes:.0f} min you have.")
+            notes.append(f"The main route takes about {minutes:.0f} min, {'a little ' if minutes - budget_minutes <= 10 else ''}"
+                         f"over the {budget_minutes:.0f} min you have.")
         if extras:
             here = route[-1]["gallery"] if route else start
             chosen, left_out = _onward(extras, here)
             more, _ = _walk(chosen, here, minutes_per_stop, offset=minutes, order=list(dict.fromkeys(s["gallery"] for s in chosen)))
             extra_stops = [{**r, "extra": True} for r in more]
             if left_out:
-                notes.append("Extras left out because they would mean doubling back: "
-                             + "; ".join(f"{s.get('title', '')} ({s['object_id']}, gallery {s['gallery']})" for s in left_out))
+                notes.append("Also on theme, but left out to avoid doubling back: "
+                             + "; ".join(f"{(s.get('title') or '').split('|')[-1].strip()} ({s['object_id']}, gallery {s['gallery']})"
+                                         for s in left_out))
     if cloisters:
         notes.append(f"{len(cloisters)} stop(s) are at The Met Cloisters, a separate building in Fort Tryon "
                      "Park; they are listed apart and not included in the walk.")
