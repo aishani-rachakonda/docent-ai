@@ -281,6 +281,27 @@ details.steps.live .steps-count::before { content: ""; display: inline-block; wi
 .step .raw pre { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word;
   max-height: 240px; overflow: auto; background: var(--bg); padding: 6px; margin: 4px 0 0; }
 @media (max-width: 640px) { .steps-body { grid-template-columns: 1fr; max-height: 64vh; } }
+
+/* Playing speed */
+.speed { border: 1px solid var(--ink); background: transparent; color: var(--ink); border-radius: 0; cursor: pointer;
+  min-width: 64px; padding: 6px 12px 7px; font-size: 17px; font-variant-numeric: tabular-nums; }
+.speed:hover { background: var(--ink); color: var(--bg); }
+.card .actions .speed { padding: 10px 14px 11px; font-size: 18px; }
+.ov-play { display: flex; gap: 8px; align-items: stretch; }
+.answer-tools { gap: 8px; }
+@media (max-width: 640px) {
+  .ov-play { width: 100%; }
+  .ov-top .ov-play .listen { flex: 1; width: auto; }
+  .card .actions { flex-wrap: nowrap; }
+  .listen.stop-listen { flex: 1; width: auto; }
+}
+
+/* The sentence being read aloud */
+.sent { transition: background-color .25s; }
+.sent.reading, .stopno.reading, h1.reading, h2.reading, h3.reading {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent); }
+@media (prefers-reduced-motion: reduce) { .sent { transition: none; } }
 </style>
 </head>
 <body>
@@ -495,7 +516,7 @@ function renderGuide(data, events, seconds) {
     if (notes) overview.after(notes);
   } else if (Speech.ok && (data.response || "").length > 120) {
     const tools = el("div", "answer-tools");
-    tools.appendChild(listenButton(() => [speakable(body)], body, "Listen"));
+    tools.append(listenButton(() => [{ segs: answerSegs(body) }], body, "Listen"), speedButton());
     body.prepend(tools);
   }
   m.appendChild(body);
@@ -620,7 +641,7 @@ function makeCard(n, rawTitle, gallery, stop, section) {
   if (look) content.appendChild(look);
   if (Speech.ok) {
     const actions = el("div", "actions");
-    actions.appendChild(listenButton(() => [cardSpeech(card, n)], card, "Listen to this stop", "stop-listen"));
+    actions.append(listenButton(() => [{ segs: cardSegs(card, n), card }], card, "Listen to this stop", "stop-listen"), speedButton());
     content.appendChild(actions);
   }
   if (story.childNodes.length) {
@@ -655,8 +676,12 @@ function tourBar(route, cards) {
   const when = route_checked(route.checked_at);
   if (when) { const w = el("span", "ov-when"); w.textContent = when; sum.appendChild(w); }
   top.appendChild(sum);
-  if (Speech.ok) top.appendChild(listenButton(() => main.map((c, i) => ({ text: cardSpeech(c, i + 1), card: c })),
-                                              null, "Play the whole tour", "primary"));
+  if (Speech.ok) {
+    const play = el("div", "ov-play");
+    play.append(listenButton(() => main.map((c, i) => ({ segs: cardSegs(c, i + 1), card: c })), null, "Play the whole tour", "primary"),
+                speedButton());
+    top.appendChild(play);
+  }
   nav.appendChild(top);
   const list = el("ol", "ov-list");
   cards.forEach((c, i) => {
@@ -677,17 +702,67 @@ function tourBar(route, cards) {
   return nav;
 }
 
-function cardSpeech(card, n) {
+// What a stop's audio reads, as sentences marked in the page: the stop and title, what to look for,
+// then the story (the order the card shows them). Each piece of text knows its element, so the
+// sentence being read can be highlighted.
+function cardSegs(card, n) {
   const label = card.classList.contains("extra") ? `Extra stop, number ${String(n).replace(/^E/, "")}` : `Stop ${n}`;
-  // In the order the card shows them: what to look for, then the story
-  const story = card.querySelector(".story"), look = card.querySelector(".lookfor");
-  let lookText = "";
-  if (look) {
-    const c = look.cloneNode(true);
-    c.querySelectorAll(".cite, b").forEach(x => x.remove());
-    lookText = "Look for " + c.textContent.replace(/\s+/g, " ").trim().replace(/^(\w)/, m => m.toLowerCase()).replace(/[.\s]*$/, ".") + " ";
+  const segs = [{ text: label + ".", el: card.querySelector(".stopno") },
+                { text: card.dataset.title + ".", el: card.querySelector("h3") }];
+  const look = card.querySelector(".lookfor");
+  if (look) sentenceSegs(look).forEach((sg, i) => segs.push(i ? sg : {
+    ...sg, text: "Look for " + sg.text.replace(/^(\w)/, m => m.toLowerCase()) }));
+  const story = card.querySelector(".story");
+  if (story) story.querySelectorAll("p, li").forEach(b => segs.push(...sentenceSegs(b)));
+  return segs;
+}
+
+function cardSpeech(card, n) { return cardSegs(card, n).map(sg => sg.text).join(" "); }
+
+// A plain answer's sentences, top to bottom, skipping the folded notes and the steps panel
+function answerSegs(body) {
+  const segs = [];
+  body.querySelectorAll("h1, h2, h3, p, li").forEach(b => {
+    if (b.closest("details, .answer-tools, .actions") || b.querySelector("p, li")) return;
+    if (/^H\d$/.test(b.nodeName)) { const t = spoken(b); if (t) segs.push({ text: t + ".", el: b }); }
+    else segs.push(...sentenceSegs(b));
+  });
+  return segs;
+}
+
+const SENTENCE_END = /(?<=[.!?]["”’)]?)\s+(?=[A-Z"“‘(])/;
+
+// Wrap each sentence of a block in <span class="sent"> (once), and return [{text, el}] for each.
+// Citation chips sit before the full stop, so splitting text nodes at sentence ends keeps each chip
+// with its sentence.
+function sentenceSegs(block) {
+  if (!block.dataset.sents) {
+    block.dataset.sents = "1";
+    const groups = [[]];
+    [...block.childNodes].forEach(node => {
+      if (node.nodeType !== 3) { groups[groups.length - 1].push(node); return; }
+      node.textContent.split(SENTENCE_END).forEach((part, i) => {
+        if (i) groups.push([]);
+        groups[groups.length - 1].push(document.createTextNode(part));
+      });
+    });
+    block.textContent = "";
+    groups.forEach(g => {
+      if (!g.length) return;
+      const span = el("span", "sent");
+      span.append(...g);
+      block.appendChild(span);
+      block.appendChild(document.createTextNode(" "));
+    });
   }
-  return `${label}. ${card.dataset.title}. ` + lookText + (story ? speakable(story) : "");
+  return [...block.querySelectorAll(":scope > .sent")].map(sp => ({ text: spoken(sp), el: sp })).filter(sg => sg.text);
+}
+
+// The words of an element as they should be spoken: no citation chips, labels or buttons
+function spoken(node) {
+  const c = node.cloneNode(true);
+  c.querySelectorAll(".cite, button, b").forEach(x => x.remove());
+  return c.textContent.replace(/\s+/g, " ").replace(/\s+([.,;:])/g, "$1").replace(/[,;:]+\./g, ".").trim();
 }
 
 // "Before you go" folds into one line that opens on tap
@@ -729,6 +804,14 @@ const Speech = {
   urls: [],
   abort: null,
   fallbackVoice: null,
+  rate: (() => { try { return +localStorage.getItem("voice-rate") || 1; } catch (e) { return 1; } })(),
+  // Playing speed, kept between visits; the voice keeps its pitch
+  setRate(r) {
+    this.rate = r;
+    try { localStorage.setItem("voice-rate", String(r)); } catch (e) {}
+    this.player.defaultPlaybackRate = this.player.playbackRate = r;
+    document.querySelectorAll(".speed").forEach(b => { b.textContent = speedLabel(r); b.title = `Playing speed: ${speedLabel(r)}. Tap to change.`; });
+  },
   // A silent sound played inside the click, so phones allow the voice that follows
   unlock() {
     const n = 800, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
@@ -746,7 +829,8 @@ const Speech = {
     const queue = [];
     items.forEach(it => {
       const item = typeof it === "string" ? { text: it } : it;
-      chunks(item.text, queue.length === 0).forEach((t, k) => queue.push({ t, card: k === 0 ? item.card : null }));
+      const pieces = item.segs ? pieceSegs(item.segs, queue.length === 0) : chunks(item.text, queue.length === 0).map(t => ({ t, segs: [] }));
+      pieces.forEach((p, k) => queue.push({ ...p, card: k === 0 ? item.card : null }));
     });
     const fetched = [];
     const speak = text => fetch("/speak", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -768,22 +852,45 @@ const Speech = {
       if (q.card) {
         document.querySelectorAll(".card.speaking").forEach(c => c.classList.remove("speaking"));
         q.card.classList.add("speaking");
-        q.card.scrollIntoView({ behavior: "smooth", block: "start" });
+        if (!q.segs.length) q.card.scrollIntoView({ behavior: "smooth", block: "start" });
       }
       if (!started) { started = true; onStart && onStart(); }
+      this.follow(q, 0);
       if (url) {
         this.urls.push(url);
         this.player.src = url;
+        this.player.preservesPitch = true;
+        this.player.defaultPlaybackRate = this.player.playbackRate = this.rate;
         this.player.onended = next;
         this.player.onerror = next;
-        this.player.play().catch(() => this.browserSay(q.t, next));
+        // Within a piece, move the highlight by each sentence's share of the text
+        this.player.ontimeupdate = () => this.player.duration && this.follow(q, this.player.currentTime / this.player.duration);
+        this.player.play().catch(() => this.browserSay(q, next));
       } else {
-        this.browserSay(q.t, next);
+        this.browserSay(q, next);
       }
     };
     next();
   },
-  browserSay(text, then) {
+  // Highlight the sentence at this point (0 to 1) of a piece; scroll only if it is off screen
+  follow(q, at) {
+    if (!q.segs || !q.segs.length) return;
+    const sg = q.segs.find(x => at < x.end) || q.segs[q.segs.length - 1];
+    if (this.reading === sg.el) return;
+    this.mark(sg.el);
+  },
+  mark(node) {
+    if (this.reading) this.reading.classList.remove("reading");
+    this.reading = node || null;
+    if (!node) return;
+    node.classList.add("reading");
+    const r = node.getBoundingClientRect(), bar = document.querySelector(".composer");
+    const bottom = window.innerHeight - (bar ? bar.offsetHeight : 0) - 16;
+    if (r.top < 16 || r.bottom > bottom) node.scrollIntoView({ behavior: "smooth", block: "center" });
+  },
+  reading: null,
+  browserSay(q, then) {
+    const text = typeof q === "string" ? q : q.t;
     if (!("speechSynthesis" in window)) { then(); return; }
     if (!this.fallbackVoice) {
       const vs = speechSynthesis.getVoices().filter(v => /^en(-|_|$)/i.test(v.lang));
@@ -792,7 +899,8 @@ const Speech = {
     }
     const u = new SpeechSynthesisUtterance(text);
     if (this.fallbackVoice) u.voice = this.fallbackVoice;
-    u.rate = 0.95;
+    u.rate = 0.95 * this.rate;
+    if (q.segs && q.segs.length) u.onboundary = e => this.follow(q, e.charIndex / Math.max(1, text.length));
     const token = this.token;
     u.onend = () => token === this.token && then();
     u.onerror = e => { if (token === this.token && e.error !== "interrupted" && e.error !== "canceled") then(); };
@@ -801,7 +909,8 @@ const Speech = {
   stop() {
     this.token++;
     if (this.abort) this.abort.abort();
-    this.player.onended = this.player.onerror = null;
+    this.player.onended = this.player.onerror = this.player.ontimeupdate = null;
+    this.mark(null);
     this.player.pause();
     if ("speechSynthesis" in window) speechSynthesis.cancel();
     this.urls.forEach(u => URL.revokeObjectURL(u)); this.urls = [];
@@ -809,6 +918,28 @@ const Speech = {
     if (this.active) { setListen(this.active.button, false, this.active.label); this.active = null; }
   },
 };
+
+// Pieces of marked sentences, a sentence or two each (the first is one, so the voice starts quickly).
+// Each sentence records where its share of the piece ends (0 to 1), for the highlight.
+function pieceSegs(segs, quickStart = false) {
+  const out = [];
+  let cur = [];
+  const flush = () => {
+    if (!cur.length) return;
+    const t = cur.map(x => x.text).join(" ");
+    let at = 0;
+    out.push({ t, segs: cur.map(x => ({ el: x.el, end: (at += x.text.length + 1) / (t.length + 1) })) });
+    cur = [];
+  };
+  segs.forEach(sg => {
+    const limit = quickStart && !out.length ? 90 : 260;
+    const len = cur.reduce((n, x) => n + x.text.length + 1, 0);
+    if (cur.length && len + sg.text.length > limit) flush();
+    cur.push(sg);
+  });
+  flush();
+  return out;
+}
 
 // Pieces of a sentence or two. The very first is one sentence, so the voice starts quickly.
 function chunks(text, quickStart = false) {
@@ -826,6 +957,19 @@ function chunks(text, quickStart = false) {
 function setListen(button, on, label, waiting = false) {
   button.setAttribute("aria-pressed", on ? "true" : "false");
   button.innerHTML = (on ? STOP : PLAY) + `<span>${on ? (waiting ? "Starting…" : "Stop") : label}</span>`;
+}
+
+const SPEEDS = [1, 1.25, 1.5];
+function speedLabel(r) { return `${r}×`; }
+// Cycles 1× -> 1.25× -> 1.5×; every speed button on the page shows the same setting
+function speedButton() {
+  const b = el("button", "speed");
+  b.type = "button";
+  b.textContent = speedLabel(Speech.rate);
+  b.title = `Playing speed: ${speedLabel(Speech.rate)}. Tap to change.`;
+  b.setAttribute("aria-label", "Playing speed");
+  b.addEventListener("click", () => Speech.setRate(SPEEDS[(SPEEDS.indexOf(Speech.rate) + 1) % SPEEDS.length]));
+  return b;
 }
 
 function listenButton(getItems, highlight, label, cls = "") {
