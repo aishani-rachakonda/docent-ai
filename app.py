@@ -12,14 +12,15 @@ from pathlib import Path
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 load_dotenv(Path(__file__).parent / ".env")
 
 import guide  # noqa: E402  (reads model settings from the environment loaded above)
 import met_tools  # noqa: E402
+import speech  # noqa: E402
 
 HERE = Path(__file__).parent
 app = FastAPI(title="Docent AI")
@@ -51,6 +52,22 @@ def index():
 @app.get("/snapshot")
 def snapshot():
     return met_tools.snapshot_info()
+
+
+class SpeakRequest(BaseModel):
+    text: str
+
+
+@app.post("/speak")
+async def speak(request: SpeakRequest):
+    """A sentence or two of a story, read aloud by a natural voice (WAV)."""
+    if not request.text.strip():
+        raise HTTPException(400, "No text")
+    try:
+        audio = await speech.synthesize(request.text)
+    except Exception as e:  # the page falls back to the browser's own voice
+        raise HTTPException(502, f"Speech failed: {type(e).__name__}")
+    return Response(audio, media_type="audio/wav", headers={"Cache-Control": "private, max-age=86400"})
 
 
 @app.post("/chat", response_model=ChatResponse)

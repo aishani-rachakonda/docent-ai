@@ -89,6 +89,11 @@ body.started header { padding-top: 20px; }
   font-weight: 600; font-size: 14px; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; }
 .card .photo.none .num { position: static; margin: 0 auto 8px; }
 .card .content { padding: 14px 16px 16px; }
+.card.extra { border-style: dashed; background: transparent; }
+.card.extra .photo img { max-height: 280px; }
+.card.extra .num { background: var(--surface); color: var(--accent); border: 1.5px solid var(--accent); width: auto; min-width: 30px; padding: 0 6px; border-radius: 999px; }
+.msg.guide h2.extras-head { margin: 28px 0 2px; font-size: 22px; }
+.extras-head + .more { margin-top: 0; }
 .msg.guide .card h3 { margin: 0; font-size: 21px; }
 .card .orig { font-size: 13px; color: var(--muted); margin-top: 2px; }
 .card .meta { font-size: 14px; color: var(--muted); margin: 4px 0 2px; }
@@ -357,10 +362,10 @@ function renderGuide(data) {
 
 // --- Tour cards ---
 
-const STOP_HEAD = /^\s*(\d+)\.\s*(.+?)\s+[—–-]\s+Gallery\s+(.+?)\s*(?:\((?:optional|if time allows)\))?\s*$/i;
+const STOP_HEAD = /^\s*(E?\d+)\.\s*(.+?)\s+[—–-]\s+Gallery\s+(.+?)\s*(?:\((?:optional|if time allows)\))?\s*$/i;
 
 function buildCards(body, route) {
-  const stops = [...(route.stops || []), ...(route.cloisters_stops || [])];
+  const stops = [...(route.stops || []), ...(route.extras || []), ...(route.cloisters_stops || [])];
   const byId = Object.fromEntries(stops.map(s => [String(s.object_id), s]));
   const cards = [];
   [...body.querySelectorAll("h3")].forEach(h => {
@@ -371,16 +376,26 @@ function buildCards(body, route) {
     for (let n = h.nextSibling; n && !/^(H1|H2|H3|HR)$/.test(n.nodeName); n = n.nextSibling) section.push(n);
     const ids = section.flatMap(n => n.querySelectorAll ? [...n.querySelectorAll("a.cite")] : [])
       .map(a => (a.href.match(/search\/(\d+)/) || [])[1]).filter(Boolean);
-    const stop = byId[ids.find(id => byId[id])] || stops[+m[1] - 1] || {};
-    const card = makeCard(+m[1], m[2], m[3], stop, section);
+    const stop = byId[ids.find(id => byId[id])] || (/^\d+$/.test(m[1]) ? (route.stops || [])[+m[1] - 1] : null) || {};
+    const card = makeCard(m[1], m[2], m[3], stop, section);
     h.replaceWith(card);
     cards.push(card);
   });
+  // Extras get their own section after the main route
+  const extras = cards.filter(c => c.classList.contains("extra"));
+  if (extras.length) {
+    let head = [...body.querySelectorAll("h1, h2")].find(x => /extra/i.test(x.textContent));
+    if (!head) { head = el("h2"); head.textContent = "Extras, if you have time"; extras[0].before(head); }
+    head.classList.add("extras-head");
+    const note = el("p", "more");
+    note.textContent = "Short detours from the main route, each listed with the stop it's closest to.";
+    head.after(note);
+  }
   return cards;
 }
 
 function makeCard(n, rawTitle, gallery, stop, section) {
-  const card = el("section", "card");
+  const card = el("section", "card" + (stop.extra || /^E/.test(n) ? " extra" : ""));
   // Titles in two scripts come as "原文|English": show the English, keep the original underneath
   const [orig, english] = rawTitle.includes("|") ? rawTitle.split("|", 2) : ["", rawTitle];
   card.dataset.title = english.trim();
@@ -405,15 +420,20 @@ function makeCard(n, rawTitle, gallery, stop, section) {
     const meta = el("div", "meta");
     while (first.firstChild && first.firstChild.nodeName !== "BR") meta.appendChild(first.firstChild);
     if (first.firstChild) first.firstChild.remove();
-    meta.textContent = meta.textContent.replace(/\s*·\s*about\s+[\d.]+\s*min in[\s\S]*$/i, "").trim();
+    meta.textContent = meta.textContent.replace(/\s*·\s*(about\s+[\d.]+\s*min in|near stop)[\s\S]*$/i, "").trim();
     content.appendChild(meta);
   }
 
   const walk = el("div", "walk");
   const bits = [`Gallery ${stop.gallery || gallery}`];
   if (stop.floor) bits.push(`floor ${stop.floor}`);
-  if (stop.arrive_after_minutes !== undefined) bits.push(`${Math.round(stop.arrive_after_minutes)} min in`);
-  if (stop.walk_minutes_before) bits.push(`${Math.round(stop.walk_minutes_before)} min walk from the last stop`);
+  if (stop.extra) {
+    if (stop.near_stop) bits.push(`near stop ${stop.near_stop}`);
+    if (stop.extra_minutes) bits.push(`adds about ${stop.extra_minutes} min`);
+  } else {
+    if (stop.arrive_after_minutes !== undefined) bits.push(`${Math.round(stop.arrive_after_minutes)} min in`);
+    if (stop.walk_minutes_before) bits.push(`${Math.round(stop.walk_minutes_before)} min walk from the last stop`);
+  }
   walk.appendChild(document.createTextNode(bits.join(" · ")));
   const tag = (cls, text) => { const g = el("span", "tag " + cls); g.textContent = text; walk.appendChild(g); };
   if (stop.optional) tag("opt", "if time allows");
@@ -447,15 +467,17 @@ function makeCard(n, rawTitle, gallery, stop, section) {
 function tourBar(route, cards) {
   const bar = el("div", "tour-bar");
   const sum = el("span", "sum");
-  sum.textContent = `${cards.length} stops · about ${route.total_minutes} min`;
+  const main = cards.filter(c => !c.classList.contains("extra")), extra = cards.length - main.length;
+  sum.textContent = `${main.length} stops · about ${route.total_minutes} min` + (extra ? ` · ${extra} extra${extra > 1 ? "s" : ""} if you have time` : "");
   bar.appendChild(sum);
-  if (Speech.ok) bar.appendChild(listenButton(() => cards.map((c, i) => ({ text: cardSpeech(c, i + 1), card: c })),
+  if (Speech.ok) bar.appendChild(listenButton(() => main.map((c, i) => ({ text: cardSpeech(c, i + 1), card: c })),
                                               null, "Play the whole tour", "primary"));
   return bar;
 }
 
 function cardSpeech(card, n) {
-  return `Stop ${n}. ${card.dataset.title}. ` + speakable(card.querySelector(".content"), ".meta, .walk, .actions, h3, .orig");
+  const label = /^E/.test(String(n)) ? `Extra stop ${String(n).slice(1)}` : `Stop ${n}`;
+  return `${label}. ${card.dataset.title}. ` + speakable(card.querySelector(".content"), ".meta, .walk, .actions, h3, .orig");
 }
 
 // Readable text of a node: no citation chips, buttons or (optionally) other parts
@@ -466,78 +488,117 @@ function speakable(node, skip = "") {
   return c.textContent.replace(/\s+/g, " ").replace(/(\.\s*){2,}/g, ". ").replace(/\s+([.,;:])/g, "$1").trim();
 }
 
-// --- Audio: the browser's own speech synthesis, nothing sent anywhere ---
+// --- Audio: a natural voice from the server (/speak), a sentence or two at a time, fetched ahead
+// of what is playing. If the server can't speak, the browser's own voice takes over. ---
 
 const PLAY = '<svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M7 4.5v15a1 1 0 0 0 1.5.86l12-7.5a1 1 0 0 0 0-1.72l-12-7.5A1 1 0 0 0 7 4.5z"/></svg>';
 const STOP = '<svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></svg>';
+const AHEAD = 2;  // pieces fetched ahead of the one playing
 
 const Speech = {
-  ok: "speechSynthesis" in window && "SpeechSynthesisUtterance" in window,
+  ok: "Audio" in window,
   token: 0,
-  active: null,   // {button, label, cls}
-  voice: null,
-  pickVoice() {
-    const vs = speechSynthesis.getVoices().filter(v => /^en(-|_|$)/i.test(v.lang));
-    const score = v => (/natural|neural|premium|enhanced/i.test(v.name) ? 4 : 0) + (/google|samantha|daniel|karen|moira|serena/i.test(v.name) ? 2 : 0)
-                     + (/en[-_]US/i.test(v.lang) ? 1 : 0) + (v.localService ? 0.5 : 0);
-    this.voice = vs.sort((a, b) => score(b) - score(a))[0] || null;
+  active: null,   // {button, label}
+  player: new Audio(),
+  urls: [],
+  abort: null,
+  fallbackVoice: null,
+  // A silent sound played inside the click, so phones allow the voice that follows
+  unlock() {
+    const n = 800, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+    const w = (o, str) => [...str].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+    w(0, "RIFF"); v.setUint32(4, 36 + n * 2, true); w(8, "WAVEfmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+    v.setUint16(22, 1, true); v.setUint32(24, 8000, true); v.setUint32(28, 16000, true); v.setUint16(32, 2, true);
+    v.setUint16(34, 16, true); w(36, "data"); v.setUint32(40, n * 2, true);
+    this.player.src = URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+    this.player.play().catch(() => {});
   },
-  // Speak a list of items ({text, card} or strings), one after another
-  play(items, onDone) {
-    speechSynthesis.cancel();
+  // Play a list of items ({text, card} or strings), one after another
+  play(items, onDone, onStart) {
     const token = ++this.token;
+    this.abort = new AbortController();
     const queue = [];
     items.forEach(it => {
       const item = typeof it === "string" ? { text: it } : it;
-      chunks(item.text).forEach((t, k) => queue.push({ t, card: k === 0 ? item.card : null, first: k === 0 }));
+      chunks(item.text, queue.length === 0).forEach((t, k) => queue.push({ t, card: k === 0 ? item.card : null }));
     });
-    let i = 0;
-    const next = () => {
+    const fetched = [];
+    const get = i => {
+      if (i >= queue.length) return null;
+      if (!fetched[i]) fetched[i] = fetch("/speak", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: queue[i].t }), signal: this.abort.signal })
+        .then(r => r.ok ? r.blob() : null).then(b => b ? URL.createObjectURL(b) : null).catch(() => null);
+      return fetched[i];
+    };
+    let i = 0, started = false;
+    const next = async () => {
       if (token !== this.token) return;
       if (i >= queue.length) { onDone(); return; }
-      const q = queue[i++];
+      const k = i++, q = queue[k];
+      for (let j = 1; j <= AHEAD; j++) get(k + j);
+      const url = await get(k);
+      if (token !== this.token) return;
       if (q.card) {
         document.querySelectorAll(".card.speaking").forEach(c => c.classList.remove("speaking"));
         q.card.classList.add("speaking");
         q.card.scrollIntoView({ behavior: "smooth", block: "start" });
       }
-      const u = new SpeechSynthesisUtterance(q.t);
-      if (this.voice) u.voice = this.voice;
-      u.lang = (this.voice && this.voice.lang) || "en-US";
-      u.rate = 0.95;
-      u.onend = next;
-      u.onerror = e => { if (e.error !== "interrupted" && e.error !== "canceled") next(); };
-      speechSynthesis.speak(u);
+      if (!started) { started = true; onStart && onStart(); }
+      if (url) {
+        this.urls.push(url);
+        this.player.src = url;
+        this.player.onended = next;
+        this.player.onerror = next;
+        this.player.play().catch(() => this.browserSay(q.t, next));
+      } else {
+        this.browserSay(q.t, next);
+      }
     };
     next();
   },
+  browserSay(text, then) {
+    if (!("speechSynthesis" in window)) { then(); return; }
+    if (!this.fallbackVoice) {
+      const vs = speechSynthesis.getVoices().filter(v => /^en(-|_|$)/i.test(v.lang));
+      const score = v => (/natural|neural|premium|enhanced/i.test(v.name) ? 4 : 0) + (/google|samantha|daniel/i.test(v.name) ? 2 : 0);
+      this.fallbackVoice = vs.sort((a, b) => score(b) - score(a))[0] || null;
+    }
+    const u = new SpeechSynthesisUtterance(text);
+    if (this.fallbackVoice) u.voice = this.fallbackVoice;
+    u.rate = 0.95;
+    const token = this.token;
+    u.onend = () => token === this.token && then();
+    u.onerror = e => { if (token === this.token && e.error !== "interrupted" && e.error !== "canceled") then(); };
+    speechSynthesis.speak(u);
+  },
   stop() {
     this.token++;
-    if (this.ok) speechSynthesis.cancel();
+    if (this.abort) this.abort.abort();
+    this.player.onended = this.player.onerror = null;
+    this.player.pause();
+    if ("speechSynthesis" in window) speechSynthesis.cancel();
+    this.urls.forEach(u => URL.revokeObjectURL(u)); this.urls = [];
     document.querySelectorAll(".card.speaking").forEach(c => c.classList.remove("speaking"));
     if (this.active) { setListen(this.active.button, false, this.active.label); this.active = null; }
   },
 };
-if (Speech.ok) {
-  Speech.pickVoice();
-  speechSynthesis.addEventListener?.("voiceschanged", () => Speech.pickVoice());
-}
 
-// Short pieces: some browsers stop long utterances partway through
-function chunks(text) {
+// Pieces of a sentence or two. The very first is one sentence, so the voice starts quickly.
+function chunks(text, quickStart = false) {
   const out = [];
   let cur = "";
-  (text.match(/[^.!?]+[.!?]*\s*/g) || [text]).forEach(s => {
-    if ((cur + s).length > 220 && cur) { out.push(cur.trim()); cur = ""; }
+  (text.match(/[^.!?]+[.!?]*["”’)]*\s*/g) || [text]).forEach(s => {
+    const limit = quickStart && !out.length ? 90 : 260;
+    if (cur && (cur + s).length > limit) { out.push(cur.trim()); cur = ""; }
     cur += s;
   });
   if (cur.trim()) out.push(cur.trim());
   return out;
 }
 
-function setListen(button, on, label) {
+function setListen(button, on, label, waiting = false) {
   button.setAttribute("aria-pressed", on ? "true" : "false");
-  button.innerHTML = (on ? STOP : PLAY) + `<span>${on ? "Stop" : label}</span>`;
+  button.innerHTML = (on ? STOP : PLAY) + `<span>${on ? (waiting ? "Starting…" : "Stop") : label}</span>`;
 }
 
 function listenButton(getItems, highlight, label, cls = "") {
@@ -547,10 +608,11 @@ function listenButton(getItems, highlight, label, cls = "") {
   b.addEventListener("click", () => {
     if (Speech.active && Speech.active.button === b) { Speech.stop(); return; }
     Speech.stop();
+    Speech.unlock();
     Speech.active = { button: b, label };
-    setListen(b, true, label);
+    setListen(b, true, label, true);
     const items = getItems().map(it => (typeof it === "string" && highlight && highlight.classList.contains("card")) ? { text: it, card: highlight } : it);
-    Speech.play(items, () => Speech.stop());
+    Speech.play(items, () => Speech.stop(), () => setListen(b, true, label));
   });
   return b;
 }

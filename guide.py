@@ -61,8 +61,10 @@ class LogHooks(RunHooks):
         except json.JSONDecodeError:
             args = {"raw": getattr(context, "tool_arguments", "")}
         text = result if isinstance(result, str) else json.dumps(result, default=str)
+        # The page draws the tour from plan_route's result, so that one is kept whole
+        limit = 30_000 if tool.name == "plan_route" else 4000
         context.context.tool_calls.append(
-            {"agent": agent.name, "name": tool.name, "args": args, "result": text[:4000]})
+            {"agent": agent.name, "name": tool.name, "args": args, "result": text[:limit]})
 
 
 HOOKS = LogHooks()
@@ -186,19 +188,22 @@ def search_wikipedia(query: str) -> str:
 
 
 @function_tool
-async def plan_route(object_ids: list[int], start_gallery: str = "", minutes_per_stop: float = 6,
-                     budget_minutes: float | None = None) -> str:
-    """Order tour stops into a walk through the building and estimate the time. Also checks each
-    object against the Met's live API, and drops any that are no longer on view.
+async def plan_route(object_ids: list[int], extra_ids: list[int] | None = None, start_gallery: str = "",
+                     minutes_per_stop: float = 6, budget_minutes: float | None = None) -> str:
+    """Order the main stops into a walk through the building and estimate the time, and attach each
+    extra to the main stop it is nearest, as an optional detour. Also checks every object against
+    the Met's live API, and drops any that are no longer on view.
 
     Args:
-        object_ids: The stops, in any order (8 to 12 is a good tour).
+        object_ids: The main stops, in any order: about one per 10 minutes of the visitor's time.
+        extra_ids: 2 to 4 more good stops for a visitor who has time left, in any order.
         start_gallery: Where the visitor is now (a gallery number); empty means the main entrance.
         minutes_per_stop: Time to spend at each object.
         budget_minutes: The visitor's total time, if they gave one.
     """
+    extra_ids = [i for i in dict.fromkeys(extra_ids or []) if i not in set(object_ids)]
     stops, missing = [], []
-    for oid in dict.fromkeys(object_ids):
+    for oid in list(dict.fromkeys(object_ids)) + extra_ids:
         o = met_tools.get_object(oid)
         if "error" in o:
             missing.append(oid)
@@ -221,7 +226,9 @@ async def plan_route(object_ids: list[int], start_gallery: str = "", minutes_per
             if v.get("image_small_url") and not s.get("image_small_url"):
                 s["image_small_url"] = v["image_small_url"]
     keep = [s for s in stops if s not in moved]
-    result = route.plan(keep, start_gallery, minutes_per_stop, budget_minutes)
+    extra_set = set(extra_ids)
+    result = route.plan([s for s in keep if s["object_id"] not in extra_set], start_gallery, minutes_per_stop,
+                        budget_minutes, extras=[s for s in keep if s["object_id"] in extra_set])
     if moved:
         result["notes"].append("Removed (the Met's live data says no longer on view): "
                                + "; ".join(f"{s['title']} ({s['object_id']})" for s in moved))
@@ -448,6 +455,11 @@ it, join it to the tour's thread in a few words, or drop a sentence; never add f
 "Look for: ..." from the Storyteller's look_for. If a stop has no story, write two or three sentences
 from the Researcher's evidence. End each sentence that states a fact with its source tag:
 [met:<object_id>] or [wikipedia:<Article Title>].
+After the main stops, if the route has extras: a heading "## Extras, if you have time", then each
+extra, in the given order, as:
+### E<n>. <Title> — Gallery <number>
+*<artist or culture>, <date>* · near stop <near_stop>, about <extra_minutes> extra min
+followed by its story and "Look for" line, as for a main stop.
 Then a short "Before you go" list with the route notes you were given (approximate walking times,
 removed stops, optional stops), and anything the data could not tell you.
 
@@ -500,7 +512,7 @@ async def write_tour(ctx: RunContextWrapper[Run], request: str, route_json: str,
     run = ctx.context
     try:
         route_data = json.loads(route_json)
-        stops = [s["object_id"] for s in route_data.get("stops", []) + route_data.get("cloisters_stops", [])]
+        stops = [s["object_id"] for key in ("stops", "extras", "cloisters_stops") for s in route_data.get(key, [])]
     except (ValueError, KeyError, TypeError, AttributeError):
         stops = [int(c["object_id"]) for c in _candidates(evidence_json) if str(c.get("object_id")).isdigit()]
     stories = await tell_stories(run, list(dict.fromkeys(stops)), request, evidence_json)
@@ -535,12 +547,14 @@ A. A tour ("I have two hours and love Japan"):
    - If the request is too vague to plan (no interests at all, e.g. "show me cool stuff"), ask one
      short question about their interests and time, and stop.
    - Otherwise call research once with 2 to 5 slices that cover the theme across different
-     departments. Then pick 8 to 12 stops (fewer for under an hour) from the candidates: varied,
-     on theme, not crowded into one gallery.
+     departments. Then pick from the candidates: main stops, about one per 10 minutes of the
+     visitor's time (6 for an hour; 8 if they gave no time), varied, on theme, the strongest ones,
+     not crowded into one gallery; and 2 to 4 extras, good stops for a visitor with time to spare.
    - Use the Researchers' candidates as they are: do not search the collection yourself during
      a tour. If the findings leave a gap (a slice came back empty or failed, or fewer than 6 good
      stops), call research again with new slices. At most 3 research calls in total.
-   - Call plan_route with the chosen object IDs, the visitor's start gallery and time budget.
+   - Call plan_route with the main stops as object_ids, the extras as extra_ids, the visitor's
+     start gallery and time budget.
    - Call write_tour with the request, plan_route's JSON, and the evidence for the chosen stops.
      Its text goes to the visitor as it is.
 

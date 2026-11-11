@@ -25,7 +25,7 @@ def tags(text: str) -> list[tuple[str, str]]:
 
 
 # Text the reply may contain without a citation: headings, route notes, questions, short lines
-_EXEMPT = re.compile(r"^\s*(#|\*{0,2}before you go|[-*]\s*(walk|start|route|stop|about|note|optional|removed))", re.I)
+_EXEMPT = re.compile(r"^\s*(#|\*[^*\s]|\*{0,2}before you go|[-*]\s*(walk|start|route|stop|about|note|optional|removed))", re.I)
 
 
 def sources_seen(tool_calls: list[dict]) -> tuple[set[str], set[str]]:

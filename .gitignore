@@ -7,3 +7,4 @@ __pycache__/
 data/raw/MetObjects.csv
 data/raw/*.log
 data/raw/*.jsonl
+voice-samples/
