@@ -61,6 +61,7 @@ def snapshot():
 
 class SpeakRequest(BaseModel):
     text: str
+    fresh: bool = False  # make it again: a retry after the voice stopped early
 
 
 @app.post("/speak")
@@ -97,6 +98,35 @@ async def _turn(session_id: str, lock: asyncio.Lock, message: str | list,
         except Exception as e:  # auth, quota, a model that won't stop: show it in the chat, not as a 500
             reply, tool_calls = f"Something went wrong: {type(e).__name__}: {str(e)[:300]}", []
     return ChatResponse(response=reply, session_id=session_id, tool_calls=tool_calls)
+
+
+@app.post("/speak/start")
+async def speak_start(request: SpeakRequest):
+    """Begin making a paragraph's audio; returns the id to stream it from (/speak/audio/<id>)."""
+    if not request.text.strip():
+        raise HTTPException(400, "No text")
+    return {"id": speech.start(request.text, fresh=request.fresh)}
+
+
+@app.get("/speak/audio/{key}")
+async def speak_audio(key: str):
+    """The paragraph's audio as MP3, streamed while it is being made."""
+    job = speech.status(key)
+    if job is None:
+        raise HTTPException(404, "Unknown audio")
+    if job.done and job.error and not job.chunks:
+        raise HTTPException(502, f"Speech failed: {job.error}")
+    return StreamingResponse(speech.stream(job), media_type="audio/mpeg",
+                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
+@app.get("/speak/info/{key}")
+async def speak_info(key: str):
+    """Whether a paragraph's audio is finished, and its length in seconds (exact once done)."""
+    job = speech.status(key)
+    if job is None:
+        raise HTTPException(404, "Unknown audio")
+    return {"done": job.done, "seconds": round(job.seconds, 2), "short": job.short, "error": job.error}
 
 
 @app.post("/chat", response_model=ChatResponse)

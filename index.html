@@ -707,13 +707,14 @@ function tourBar(route, cards) {
 // sentence being read can be highlighted.
 function cardSegs(card, n) {
   const label = card.classList.contains("extra") ? `Extra stop, number ${String(n).replace(/^E/, "")}` : `Stop ${n}`;
-  const segs = [{ text: label + ".", el: card.querySelector(".stopno") },
-                { text: card.dataset.title + ".", el: card.querySelector("h3") }];
+  // The opening (stop, title, what to look for) is one paragraph; each story paragraph is another
+  const segs = [{ text: label + ".", el: card.querySelector(".stopno"), para: "head" },
+                { text: card.dataset.title + ".", el: card.querySelector("h3"), para: "head" }];
   const look = card.querySelector(".lookfor");
-  if (look) sentenceSegs(look).forEach((sg, i) => segs.push(i ? sg : {
-    ...sg, text: "Look for " + sg.text.replace(/^(\w)/, m => m.toLowerCase()) }));
+  if (look) sentenceSegs(look).forEach((sg, i) => segs.push({ ...sg, para: "head",
+    text: (i ? sg.text : "Look for " + sg.text.replace(/^(\w)/, m => m.toLowerCase())).replace(/([^.!?])$/, "$1.") }));
   const story = card.querySelector(".story");
-  if (story) story.querySelectorAll("p, li").forEach(b => segs.push(...sentenceSegs(b)));
+  if (story) story.querySelectorAll("p, li").forEach((b, k) => sentenceSegs(b).forEach(sg => segs.push({ ...sg, para: "story" + k })));
   return segs;
 }
 
@@ -721,12 +722,23 @@ function cardSpeech(card, n) { return cardSegs(card, n).map(sg => sg.text).join(
 
 // A plain answer's sentences, top to bottom, skipping the folded notes and the steps panel
 function answerSegs(body) {
+  // One paragraph per request: a heading goes with the paragraph after it, a list is read as one
   const segs = [];
+  let para = 0, heading = false;
   body.querySelectorAll("h1, h2, h3, p, li").forEach(b => {
     if (b.closest("details, .answer-tools, .actions") || b.querySelector("p, li")) return;
-    if (/^H\d$/.test(b.nodeName)) { const t = spoken(b); if (t) segs.push({ text: t + ".", el: b }); }
-    else segs.push(...sentenceSegs(b));
+    if (/^H\d$/.test(b.nodeName)) {
+      const t = spoken(b);
+      if (t) { if (!heading) para++; heading = true; segs.push({ text: t + ".", el: b, para }); }
+      return;
+    }
+    const key = b.nodeName === "LI" ? b.parentElement : b;
+    if (!heading && key !== answerSegs.last) para++;
+    heading = false;
+    answerSegs.last = key;
+    sentenceSegs(b).forEach(sg => segs.push({ ...sg, para }));
   });
+  answerSegs.last = null;
   return segs;
 }
 
@@ -762,7 +774,8 @@ function sentenceSegs(block) {
 function spoken(node) {
   const c = node.cloneNode(true);
   c.querySelectorAll(".cite, button, b").forEach(x => x.remove());
-  return c.textContent.replace(/\s+/g, " ").replace(/\s+([.,;:])/g, "$1").replace(/[,;:]+\./g, ".").trim();
+  return c.textContent.replace(/\s+/g, " ").replace(/\s+([.,;:])/g, "$1").replace(/[,;:]+\./g, ".")
+    .replace(/\.{2}(?!\.)/g, ".").trim();  // "B.C.." -> "B.C."
 }
 
 // "Before you go" folds into one line that opens on tap
@@ -829,16 +842,19 @@ const Speech = {
     const queue = [];
     items.forEach(it => {
       const item = typeof it === "string" ? { text: it } : it;
-      const pieces = item.segs ? pieceSegs(item.segs, queue.length === 0) : chunks(item.text, queue.length === 0).map(t => ({ t, segs: [] }));
+      const pieces = item.segs ? pieceSegs(item.segs) : [{ t: item.text, segs: [] }];
       pieces.forEach((p, k) => queue.push({ ...p, card: k === 0 ? item.card : null }));
     });
+    // Each paragraph is one request. Starting it returns an address that streams the audio while it
+    // is being made, so playback begins within a second or two; starting the next paragraph early
+    // means it is ready by the time the current one ends.
     const fetched = [];
-    const speak = text => fetch("/speak", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }), signal: this.abort.signal })
-      .then(r => r.ok ? r.blob() : null).then(b => b ? URL.createObjectURL(b) : null).catch(() => null);
+    const start = (text, fresh = false) => fetch("/speak/start", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, fresh }), signal: this.abort.signal })
+      .then(r => r.ok ? r.json() : null).then(d => d ? `/speak/audio/${d.id}` : null).catch(() => null);
     const get = i => {
       if (i >= queue.length) return null;
-      if (!fetched[i]) fetched[i] = speak(queue[i].t).then(url => url || (token === this.token ? speak(queue[i].t) : null));
+      if (!fetched[i]) fetched[i] = start(queue[i].t, !!queue[i].retries).then(url => url || (token === this.token ? start(queue[i].t) : null));
       return fetched[i];
     };
     let i = 0, started = false;
@@ -857,15 +873,32 @@ const Speech = {
       if (!started) { started = true; onStart && onStart(); }
       this.follow(q, 0);
       if (url) {
-        this.urls.push(url);
+        let done = false;
+        // If the voice stopped before the end of the paragraph, read the rest before moving on
+        const finish = async () => {
+          if (done) return; done = true;
+          const rest = await this.remainder(q, url);
+          if (token !== this.token) return;
+          if (rest) { queue.splice(i, 0, rest); fetched.splice(i, 0, undefined); } else this.learnPace(q);
+          next();
+        };
         this.player.src = url;
         this.player.preservesPitch = true;
         this.player.defaultPlaybackRate = this.player.playbackRate = this.rate;
-        this.player.onended = next;
-        this.player.onerror = next;
-        // Within a piece, move the highlight by each sentence's share of the text
-        this.player.ontimeupdate = () => this.player.duration && this.follow(q, this.player.currentTime / this.player.duration);
-        this.player.play().catch(() => this.browserSay(q, next));
+        this.player.onended = finish;
+        // A stream that fails before it starts is read by the browser's own voice instead
+        this.player.onerror = () => { if (done) return; done = true;
+          this.player.currentTime > 1 ? next() : this.browserSay(q, next); };
+        // Within a paragraph, move the highlight by each sentence's share of the text. While the
+        // audio is still streaming its length is not known yet, so it is estimated from the pace.
+        this.player.ontimeupdate = () => {
+          const d = this.player.duration;
+          if (!(isFinite(d) && d > 0) && !q.seconds) this.askLength(q, url);
+          const length = isFinite(d) && d > 0 ? d : q.seconds || q.t.length / this.pace;
+          this.follow(q, Math.min(0.999, this.player.currentTime / length));
+        };
+        this.player.play().catch(e => { if (token === this.token && !done && e.name !== "AbortError") {
+          done = true; this.browserSay(q, next); } });
       } else {
         this.browserSay(q, next);
       }
@@ -889,6 +922,35 @@ const Speech = {
     if (r.top < 16 || r.bottom > bottom) node.scrollIntoView({ behavior: "smooth", block: "center" });
   },
   reading: null,
+  pace: 16.5,  // characters of text per second of the voice at 1x, until the real length is known
+  learnPace(q) {
+    const d = isFinite(this.player.duration) && this.player.duration > 0 ? this.player.duration : q.seconds;
+    if (d > 20 && q.t.length / d < 19) this.pace = q.t.length / d;  // from whole story paragraphs only
+  },
+  // The part of a paragraph the voice did not read, from the sentence it stopped in. Asked at most
+  // twice per paragraph, so a voice that keeps stopping cannot loop.
+  async remainder(q, url) {
+    if ((q.retries || 0) >= 2 || !q.segs.length) return null;
+    let info;
+    try { info = await (await fetch(url.replace("/audio/", "/info/"))).json(); } catch (e) { return null; }
+    if (!info.short) return null;
+    // Share of the text read, at an ordinary pace; then go back one more sentence, since the pace
+    // is only an estimate: better to hear a sentence twice than to miss one
+    const heard = info.seconds * 14 / q.t.length;
+    const stop = q.segs.findIndex(sg => sg.end > heard);
+    const from = Math.max(0, (stop < 0 ? q.segs.length - 1 : stop) - 1);
+    const segs = q.segs.slice(from);
+    const t = segs.map(sg => sg.text).join(" ");
+    let at = 0;
+    return { t, segs: segs.map(sg => ({ ...sg, end: (at += sg.text.length + 1) / (t.length + 1) })), retries: (q.retries || 0) + 1 };
+  },
+  // The server knows a paragraph's exact length once it has finished making it: ask now and then
+  askLength(q, url) {
+    if (q.asking || Date.now() - (q.asked || 0) < 2500) return;
+    q.asking = true; q.asked = Date.now();
+    fetch(url.replace("/audio/", "/info/")).then(r => r.json())
+      .then(d => { if (d.done && d.seconds > 0) q.seconds = d.seconds; }).catch(() => {}).finally(() => { q.asking = false; });
+  },
   browserSay(q, then) {
     const text = typeof q === "string" ? q : q.t;
     if (!("speechSynthesis" in window)) { then(); return; }
@@ -913,44 +975,29 @@ const Speech = {
     this.mark(null);
     this.player.pause();
     if ("speechSynthesis" in window) speechSynthesis.cancel();
-    this.urls.forEach(u => URL.revokeObjectURL(u)); this.urls = [];
+    this.player.removeAttribute("src"); this.player.load();  // stop downloading a stream that is cut off
     document.querySelectorAll(".card.speaking").forEach(c => c.classList.remove("speaking"));
     if (this.active) { setListen(this.active.button, false, this.active.label); this.active = null; }
   },
 };
 
-// Pieces of marked sentences, a sentence or two each (the first is one, so the voice starts quickly).
+// One piece of audio per paragraph, so the voice reads each paragraph whole in a single request.
 // Each sentence records where its share of the piece ends (0 to 1), for the highlight.
-function pieceSegs(segs, quickStart = false) {
+function pieceSegs(segs) {
   const out = [];
   let cur = [];
   const flush = () => {
     if (!cur.length) return;
     const t = cur.map(x => x.text).join(" ");
     let at = 0;
-    out.push({ t, segs: cur.map(x => ({ el: x.el, end: (at += x.text.length + 1) / (t.length + 1) })) });
+    out.push({ t, segs: cur.map(x => ({ el: x.el, text: x.text, end: (at += x.text.length + 1) / (t.length + 1) })) });
     cur = [];
   };
   segs.forEach(sg => {
-    const limit = quickStart && !out.length ? 90 : 260;
-    const len = cur.reduce((n, x) => n + x.text.length + 1, 0);
-    if (cur.length && len + sg.text.length > limit) flush();
+    if (cur.length && cur[cur.length - 1].para !== sg.para) flush();
     cur.push(sg);
   });
   flush();
-  return out;
-}
-
-// Pieces of a sentence or two. The very first is one sentence, so the voice starts quickly.
-function chunks(text, quickStart = false) {
-  const out = [];
-  let cur = "";
-  (text.match(/[^.!?]+[.!?]*["”’)]*\s*/g) || [text]).forEach(s => {
-    const limit = quickStart && !out.length ? 90 : 260;
-    if (cur && (cur + s).length > limit) { out.push(cur.trim()); cur = ""; }
-    cur += s;
-  });
-  if (cur.trim()) out.push(cur.trim());
   return out;
 }
 
