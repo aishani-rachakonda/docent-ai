@@ -132,11 +132,6 @@ details.work summary { cursor: pointer; font-size: 16px; color: var(--ink-2); }
 .agent .dot { width: 8px; height: 8px; background: var(--agent-guide); }
 .agent.research .dot { background: var(--agent-research); } .agent.writer .dot { background: var(--agent-writer); }
 .agent.check .dot { background: var(--agent-check); } .agent.story .dot { background: var(--agent-story); }
-.call { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 4px 0; border-top: 1px solid var(--line); }
-.call:first-of-type { border-top: 0; }
-.call details summary { cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.call pre { white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; background: var(--surface);
-  padding: 6px; margin: 4px 0 0; }
 
 /* Waiting */
 .thinking { color: var(--ink-2); font-size: 18px; font-style: italic; text-align: center; padding: 26px 0; }
@@ -241,6 +236,51 @@ details.notes ul { margin-top: 0; font-size: 16px; color: var(--ink-2); }
   .ov-list a { grid-template-columns: 26px 1fr; }
   .ov-g { grid-column: 2; }
 }
+
+/* Behind the scenes: the agents' live steps */
+details.steps { margin: 6px 0 18px; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--rule); }
+details.steps > summary { cursor: pointer; list-style: none; padding: 12px 0; display: flex; flex-wrap: wrap;
+  align-items: baseline; gap: 4px 12px; }
+details.steps > summary::-webkit-details-marker { display: none; }
+details.steps > summary::after { content: "\25B8"; color: var(--accent); margin-left: auto; }
+details.steps[open] > summary::after { content: "\25BE"; }
+details.steps .ov-label { display: inline; }
+.steps-count { font-size: 17px; color: var(--ink); font-variant-numeric: tabular-nums; }
+details.steps.live .steps-count::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 8px;
+  background: var(--accent); vertical-align: 2px; animation: blink 1.2s ease-in-out infinite; }
+@keyframes blink { 50% { opacity: .2; } }
+@media (prefers-reduced-motion: reduce) { details.steps.live .steps-count::before { animation: none; } }
+.steps-body { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px;
+  max-height: 72vh; overflow: auto; padding: 0 0 12px; }
+.lane { border: 1px solid var(--line); background: var(--surface); min-width: 0; display: flex; flex-direction: column; }
+.lane.active { border-color: var(--accent); }
+.lane-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line);
+  font-size: 15px; font-variant-caps: all-small-caps; letter-spacing: .1em; }
+.lane-head .dot { width: 8px; height: 8px; flex: none; background: var(--agent-guide); }
+.lane.research .dot { background: var(--agent-research); } .lane.writer .dot { background: var(--agent-writer); }
+.lane.check .dot { background: var(--agent-check); } .lane.story .dot { background: var(--agent-story); }
+.lane-name { color: var(--ink); }
+.lane-count { color: var(--ink-2); }
+.lane-state { margin-left: auto; color: var(--muted); }
+.lane.active .lane-state { color: var(--accent); }
+.lane-steps { max-height: 340px; overflow: auto; padding: 4px 10px 8px; }
+.step { padding: 7px 0; border-top: 1px solid var(--line); font-size: 15px; line-height: 1.45; }
+.step:first-child { border-top: 0; }
+.step-label { font-size: 13px; color: var(--accent); font-variant-caps: all-small-caps; letter-spacing: .12em; }
+.thought-head { font-weight: 700; color: var(--ink); }
+.thought-text { font-style: italic; color: var(--ink-2); cursor: pointer; display: -webkit-box; -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical; overflow: hidden; white-space: pre-line; }
+.thought-text.open { display: block; }
+.step .why { color: var(--ink); }
+.step .raw summary { cursor: pointer; list-style: none; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--ink-2); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.step .raw summary::-webkit-details-marker { display: none; }
+.step .raw summary code { font: inherit; }
+.step .raw .res { color: var(--ok); }
+.step.pending .raw .res { color: var(--accent); }
+.step .raw pre { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word;
+  max-height: 240px; overflow: auto; background: var(--bg); padding: 6px; margin: 4px 0 0; }
+@media (max-width: 640px) { .steps-body { grid-template-columns: 1fr; max-height: 64vh; } }
 </style>
 </head>
 <body>
@@ -305,7 +345,7 @@ window.addEventListener("DOMContentLoaded", () => {
   if (!shown.length) return;
   document.getElementById("chips").style.display = "none";
   document.body.classList.add("started");
-  shown.forEach(m => m.role === "user" ? addUser(m.text, null) : thread.appendChild(renderGuide(m.data)));
+  shown.forEach(m => m.role === "user" ? addUser(m.text, null) : thread.appendChild(renderGuide(m.data, m.events, m.seconds)));
 });
 
 
@@ -335,12 +375,6 @@ photo.addEventListener("change", () => {
 document.getElementById("clearImg").addEventListener("click", clearImage);
 function clearImage() { imageData = null; photo.value = ""; preview.style.display = "none"; }
 
-const WAITING = [
-  "Consulting the collection…", "Researchers are searching the galleries in parallel…",
-  "Checking each object against the Met's live data…", "Ordering the stops by gallery…",
-  "Storytellers are reading up on each stop…", "Writing the tour and checking every citation…",
-];
-
 async function ask() {
   const text = input.value.trim();
   if (!text && !imageData) return;
@@ -352,29 +386,54 @@ async function ask() {
   input.value = ""; input.style.height = "auto"; clearImage();
   send.disabled = true;
 
-  const wait = el("div", "msg guide thinking");
-  wait.innerHTML = '<span class="said"></span><span class="elapsed"></span>';
-  thread.appendChild(wait);
-  let i = 0, started = Date.now();
-  const secs = () => { wait.querySelector(".elapsed").textContent = Math.round((Date.now() - started) / 1000) + "s"; };
-  const tick = () => { wait.querySelector(".said").textContent = WAITING[Math.min(i++, WAITING.length - 1)]; secs(); };
-  tick(); const timer = setInterval(tick, 12000); const clock = setInterval(secs, 1000);
-  wait.scrollIntoView({ behavior: "smooth", block: "end" });
+  // The reply starts as the live panel of the agents' own steps, filled as the server sends them
+  const pending = el("div", "msg guide");
+  const steps = new Steps(true);
+  pending.appendChild(steps.el);
+  thread.appendChild(pending);
+  pending.scrollIntoView({ behavior: "smooth", block: "start" });
+  const events = [], started = Date.now();
 
   try {
-    const r = await fetch("/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    if (!r.ok) throw new Error(`The server answered ${r.status}`);
-    const data = await r.json();
+    const r = await fetch("/chat/stream", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!r.ok || !r.body) throw new Error(`The server answered ${r.status}`);
+    const reader = r.body.getReader(), decoder = new TextDecoder();
+    let buffer = "", data = null;
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let cut;
+      while ((cut = buffer.indexOf("\n\n")) >= 0) {
+        const line = buffer.slice(0, cut).split("\n").find(l => l.startsWith("data: "));
+        buffer = buffer.slice(cut + 2);
+        if (!line) continue;  // a keep-alive comment
+        const e = JSON.parse(line.slice(6));
+        if (e.type === "done") { const { type, ...rest } = e; data = rest; }
+        else if (e.type === "start") { sessionId = e.session_id; }
+        else { events.push(e); steps.add(e); }
+      }
+    }
+    if (!data) throw new Error("the connection closed before the answer arrived");
     sessionId = data.session_id;
     try { sessionStorage.setItem("guide-session", sessionId); } catch (e) {}
-    wait.replaceWith(renderGuide(data));
-    remember({ role: "guide", data });
+    const seconds = Math.round((Date.now() - started) / 1000);
+    steps.finish(seconds);
+    pending.replaceWith(renderGuide(data, events, seconds));
+    remember({ role: "guide", data, events: events.map(slimEvent), seconds });
   } catch (e) {
-    wait.className = "msg guide error";
-    wait.textContent = `Couldn't reach the guide: ${e.message}. Try again in a moment.`;
+    steps.finish();
+    const err = el("p", "error");
+    err.textContent = `Couldn't reach the guide: ${e.message}. Try again in a moment.`;
+    pending.appendChild(err);
   } finally {
-    clearInterval(timer); clearInterval(clock); send.disabled = false; input.focus();
+    send.disabled = false; input.focus();
   }
+}
+
+// Saved replies keep their steps, with long results shortened to fit the browser's storage
+function slimEvent(e) {
+  return e.type === "result" ? { ...e, brief: brief(e.result), result: String(e.result || "").slice(0, 600) } : e;
 }
 
 function el(tag, cls) { const e = document.createElement(tag); if (cls) e.className = cls; return e; }
@@ -403,8 +462,13 @@ function citeLinks(md) {
     }).join(""));
 }
 
-function renderGuide(data) {
+function renderGuide(data, events, seconds) {
   const m = el("div", "msg guide");
+  // Behind the scenes, folded: the steps streamed live, or for older replies, rebuilt from tool_calls
+  const steps = new Steps(false);
+  (events && events.length ? events : eventsFromCalls(data.tool_calls || [])).forEach(e => steps.add(e));
+  steps.finish(seconds);
+  if (steps.lanes.size) m.appendChild(steps.el);
   const html = DOMPurify.sanitize(marked.parse(citeLinks(data.response || ""), { breaks: true }), { ADD_ATTR: ["target"] });
   const body = el("div"); body.innerHTML = html;
   // One chip per source per paragraph: keep the last mention, drop the repeats before it
@@ -435,7 +499,6 @@ function renderGuide(data) {
     body.prepend(tools);
   }
   m.appendChild(body);
-  if ((data.tool_calls || []).length) m.appendChild(renderWork(data.tool_calls));
   return m;
 }
 
@@ -616,8 +679,15 @@ function tourBar(route, cards) {
 
 function cardSpeech(card, n) {
   const label = card.classList.contains("extra") ? `Extra stop, number ${String(n).replace(/^E/, "")}` : `Stop ${n}`;
+  // In the order the card shows them: what to look for, then the story
   const story = card.querySelector(".story"), look = card.querySelector(".lookfor");
-  return `${label}. ${card.dataset.title}. ` + (story ? speakable(story) : "") + (look ? " " + speakable(look) : "");
+  let lookText = "";
+  if (look) {
+    const c = look.cloneNode(true);
+    c.querySelectorAll(".cite, b").forEach(x => x.remove());
+    lookText = "Look for " + c.textContent.replace(/\s+/g, " ").trim().replace(/^(\w)/, m => m.toLowerCase()).replace(/[.\s]*$/, ".") + " ";
+  }
+  return `${label}. ${card.dataset.title}. ` + lookText + (story ? speakable(story) : "");
 }
 
 // "Before you go" folds into one line that opens on tap
@@ -648,7 +718,7 @@ function speakable(node, skip = "") {
 
 const PLAY = '<svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M7 4.5v15a1 1 0 0 0 1.5.86l12-7.5a1 1 0 0 0 0-1.72l-12-7.5A1 1 0 0 0 7 4.5z"/></svg>';
 const STOP = '<svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></svg>';
-const AHEAD = 2;  // pieces fetched ahead of the one playing
+const AHEAD = 1;  // pieces fetched ahead of the one playing (the voice service allows only a few at a time)
 
 const Speech = {
   ok: "Audio" in window,
@@ -678,11 +748,12 @@ const Speech = {
       chunks(item.text, queue.length === 0).forEach((t, k) => queue.push({ t, card: k === 0 ? item.card : null }));
     });
     const fetched = [];
+    const speak = text => fetch("/speak", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }), signal: this.abort.signal })
+      .then(r => r.ok ? r.blob() : null).then(b => b ? URL.createObjectURL(b) : null).catch(() => null);
     const get = i => {
       if (i >= queue.length) return null;
-      if (!fetched[i]) fetched[i] = fetch("/speak", { method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: queue[i].t }), signal: this.abort.signal })
-        .then(r => r.ok ? r.blob() : null).then(b => b ? URL.createObjectURL(b) : null).catch(() => null);
+      if (!fetched[i]) fetched[i] = speak(queue[i].t).then(url => url || (token === this.token ? speak(queue[i].t) : null));
       return fetched[i];
     };
     let i = 0, started = false;
@@ -773,31 +844,147 @@ function listenButton(getItems, highlight, label, cls = "") {
 }
 window.addEventListener("pagehide", () => Speech.stop());
 
-function renderWork(calls) {
-  const d = el("details", "work");
-  const agents = {};
-  calls.forEach(c => { (agents[c.agent] = agents[c.agent] || []).push(c); });
-  const names = Object.keys(agents);
-  const s = el("summary");
-  s.textContent = `How I got this: ${calls.length} steps by ${names.length} agent${names.length > 1 ? "s" : ""}`;
-  d.appendChild(s);
-  const grid = el("div", "agents");
-  names.forEach(n => {
-    const kind = /^Researcher/.test(n) ? "research" : /^Storyteller/.test(n) ? "story" : n === "Writer" ? "writer" : /check/i.test(n) ? "check" : "";
-    const box = el("div", "agent " + kind);
-    const head = el("div", "name"); head.innerHTML = '<span class="dot"></span>'; head.appendChild(document.createTextNode(`${n} · ${agents[n].length}`));
-    box.appendChild(head);
-    agents[n].forEach(c => {
-      const row = el("div", "call");
-      const det = el("details"); const sum = el("summary");
-      sum.textContent = `${c.name}(${shortArgs(c.args)})`;
-      const pre = el("pre"); pre.textContent = `args: ${JSON.stringify(c.args, null, 2)}\n\nresult: ${pretty(c.result)}`;
-      det.append(sum, pre); row.appendChild(det); box.appendChild(row);
-    });
-    grid.appendChild(box);
+// --- Behind the scenes: every step the agents take, in their own words, as it happens ---
+// One lane per agent, in the order they start. A lane holds the agent's thinking (Gemini's own
+// summary), and each tool call with the reason the agent gave for it, the call itself, and its result.
+
+function agentKind(n) {
+  return /^Researcher/.test(n) ? "research" : /^Storyteller/.test(n) ? "story" : n === "Writer" ? "writer" : /check/i.test(n) ? "check" : "guide";
+}
+
+function eventsFromCalls(calls) {
+  const out = [];
+  calls.forEach((c, i) => {
+    out.push({ type: "call", id: "c" + i, agent: c.agent, name: c.name, args: c.args || {} });
+    out.push({ type: "result", id: "c" + i, agent: c.agent, name: c.name, result: c.result });
   });
-  d.appendChild(grid);
-  return d;
+  return out;
+}
+
+class Steps {
+  constructor(live) {
+    this.live = live;
+    this.el = el("details", "steps" + (live ? " live" : ""));
+    this.el.open = live;
+    this.summary = el("summary");
+    this.body = el("div", "steps-body");
+    this.el.append(this.summary, this.body);
+    this.lanes = new Map();
+    this.items = {};
+    this.calls = 0;
+    this.started = Date.now();
+    this.seconds = null;
+    this.paint();
+    if (live) this.clock = setInterval(() => this.paint(), 1000);
+  }
+
+  lane(name) {
+    if (!this.lanes.has(name)) {
+      const box = el("section", "lane " + agentKind(name));
+      const head = el("div", "lane-head");
+      head.innerHTML = '<span class="dot"></span><span class="lane-name"></span><span class="lane-count"></span><span class="lane-state"></span>';
+      head.querySelector(".lane-name").textContent = name;
+      const list = el("div", "lane-steps");
+      box.append(head, list);
+      this.body.appendChild(box);
+      this.lanes.set(name, { box, head, list, calls: 0 });
+      if (this.live) this.body.scrollTop = this.body.scrollHeight;
+    }
+    return this.lanes.get(name);
+  }
+
+  state(name, active) {
+    const l = this.lane(name);
+    l.box.classList.toggle("active", active);
+    l.head.querySelector(".lane-state").textContent = this.live ? (active ? "● working" : "✓ done") : "";
+  }
+
+  push(l, node) {
+    const atEnd = l.list.scrollTop + l.list.clientHeight >= l.list.scrollHeight - 30;
+    l.list.appendChild(node);
+    if (atEnd) l.list.scrollTop = l.list.scrollHeight;
+  }
+
+  add(e) {
+    if (e.type === "agent") this.state(e.agent, true);
+    else if (e.type === "agent_end") this.state(e.agent, false);
+    else if (e.type === "thought") {
+      const l = this.lane(e.agent);
+      const t = el("div", "step thought");
+      const m = String(e.text).match(/^\*\*(.+?)\*\*\s*/);
+      const label = el("div", "step-label"); label.textContent = "Thinking";
+      const head = el("div", "thought-head"); head.textContent = m ? m[1] : "";
+      const text = el("div", "thought-text"); text.textContent = m ? e.text.slice(m[0].length) : e.text;
+      text.addEventListener("click", () => text.classList.toggle("open"));
+      t.append(label);
+      if (m) t.append(head);
+      t.append(text);
+      this.push(l, t);
+    } else if (e.type === "call") {
+      const l = this.lane(e.agent);
+      if (!this.live || e.agent === "Citation check") this.state(e.agent, e.agent === "Citation check" && this.live);
+      this.calls += 1; l.calls += 1;
+      l.head.querySelector(".lane-count").textContent = `${l.calls} tool call${l.calls > 1 ? "s" : ""}`;
+      const { why, ...rest } = e.args || {};
+      const step = el("div", "step call pending");
+      if (why) { const w = el("div", "why"); w.textContent = why; step.appendChild(w); }
+      const d = el("details", "raw");
+      const sum = el("summary");
+      const code = el("code"); code.textContent = `${e.name}(${shortArgs(rest)})`;
+      const res = el("span", "res"); res.textContent = this.live ? " … " : "";
+      sum.append(code, res);
+      const pre = el("pre"); pre.textContent = `args: ${JSON.stringify(rest, null, 2)}`;
+      d.append(sum, pre);
+      step.appendChild(d);
+      this.items[e.id] = { step, res, pre };
+      this.push(l, step);
+    } else if (e.type === "result") {
+      const it = this.items[e.id];
+      if (!it) return;
+      it.step.classList.remove("pending");
+      it.res.textContent = " → " + (e.brief || brief(e.result));
+      it.pre.textContent += `\n\nresult: ${pretty(e.result)}`;
+      if (e.agent === "Citation check" && this.live) this.state(e.agent, false);
+    }
+    this.paint();
+  }
+
+  paint() {
+    const secs = this.seconds ?? Math.round((Date.now() - this.started) / 1000);
+    const n = this.lanes.size;
+    this.summary.innerHTML = '<span class="ov-label">Behind the scenes</span>';
+    const line = el("span", "steps-count");
+    line.textContent = `${n} agent${n === 1 ? "" : "s"} · ${this.calls} tool call${this.calls === 1 ? "" : "s"}` +
+      (secs ? ` · ${secs} s` : "") + (this.live ? "" : "");
+    this.summary.appendChild(line);
+  }
+
+  finish(seconds) {
+    clearInterval(this.clock);
+    if (seconds) this.seconds = seconds;
+    this.live = false;
+    this.el.classList.remove("live");
+    this.el.open = false;
+    this.lanes.forEach((l, name) => { l.box.classList.remove("active"); l.head.querySelector(".lane-state").textContent = ""; });
+    this.paint();
+  }
+}
+
+// What came back, in a few words: a count of rows or results, a title, an error, or the start of the text
+function brief(r) {
+  let d;
+  try { d = JSON.parse(r); } catch (e) { return String(r || "").replace(/\s+/g, " ").slice(0, 90) + (String(r || "").length > 90 ? "…" : ""); }
+  if (d && typeof d === "object") {
+    if (d.error) return "error: " + String(d.error).slice(0, 80);
+    if (Array.isArray(d.rows)) return `${d.rows.length} row${d.rows.length === 1 ? "" : "s"}`;
+    if (Array.isArray(d.results)) return `${d.results.length} result${d.results.length === 1 ? "" : "s"}`;
+    if (Array.isArray(d)) return `${d.length} result${d.length === 1 ? "" : "s"}`;
+    if ("ok" in d) return `ok: ${d.ok}` + (d.tags !== undefined ? ` · ${d.tags} citations` : "");
+    if (Array.isArray(d.stops)) return `${d.stops.length} stops, ${(d.extras || []).length} extras, about ${d.total_minutes} min`;
+    if (Array.isArray(d.findings)) return `${d.findings.length} findings`;
+    if (d.title) return String(d.title).split("|").pop().trim().slice(0, 80);
+  }
+  return String(r).slice(0, 90);
 }
 
 function shortArgs(a) {

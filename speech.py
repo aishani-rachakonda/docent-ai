@@ -26,6 +26,10 @@ _creds = None
 _creds_lock = asyncio.Lock()
 _cache: OrderedDict[tuple[str, str], bytes] = OrderedDict()
 _CACHE_SIZE = 300
+# The voice model has a low per-minute quota: send a few requests at a time, and wait and retry
+# when it says "too many requests" instead of failing (a failed piece used to be skipped).
+_gate = asyncio.Semaphore(int(os.environ.get("TTS_CONCURRENCY", "2")))
+RETRIES = 4
 
 
 async def _token() -> str:
@@ -51,8 +55,12 @@ async def synthesize(text: str, voice: str = VOICE) -> bytes:
     body = {"contents": [{"role": "user", "parts": [{"text": STYLE + text}]}],
             "generationConfig": {"responseModalities": ["AUDIO"],
                                  "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice}}}}}
-    async with httpx.AsyncClient(timeout=60) as client:
-        r = await client.post(url, json=body, headers={"Authorization": f"Bearer {await _token()}"})
+    async with _gate, httpx.AsyncClient(timeout=60) as client:
+        for attempt in range(RETRIES):
+            r = await client.post(url, json=body, headers={"Authorization": f"Bearer {await _token()}"})
+            if r.status_code not in (429, 500, 503) or attempt == RETRIES - 1:
+                break
+            await asyncio.sleep(1.5 * 2 ** attempt)  # 1.5, 3, 6 s
     r.raise_for_status()
     part = r.json()["candidates"][0]["content"]["parts"][0]["inlineData"]
     pcm = base64.b64decode(part["data"])

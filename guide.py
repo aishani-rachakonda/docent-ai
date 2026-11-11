@@ -13,6 +13,7 @@ import asyncio
 import json
 import os
 import re
+import time
 from datetime import datetime, timezone
 
 import httpx
@@ -34,8 +35,9 @@ WRITER_MODEL = LitellmModel(model=os.environ.get("WRITER_MODEL", "vertex_ai/gemi
 _extra = {"vertex_location": "global", "timeout": 90, "num_retries": 2}
 if PROJECT:
     _extra["vertex_project"] = PROJECT
-SETTINGS = ModelSettings(extra_args=_extra)
-# Researchers make many quick tool calls: little thinking keeps a tour fast. Lead and Writer think fully.
+# Gemini 3 thinks at "high" by default; naming the level also returns summaries of its thinking,
+# which the page shows live. Researchers make many quick tool calls: little thinking keeps a tour fast.
+SETTINGS = ModelSettings(extra_args={**_extra, "reasoning_effort": os.environ.get("REASONING_EFFORT", "high")})
 RESEARCH_SETTINGS = ModelSettings(extra_args={**_extra, "reasoning_effort": os.environ.get("RESEARCH_EFFORT", "minimal")})
 
 MAX_RESEARCHERS = 5
@@ -58,6 +60,28 @@ class Run:
         self.found: dict[str, dict] = {}   # interest -> {"direct": n, "related": n}, over all rounds
         self.needs_more: dict | None = None  # set when the latest findings leave a gap
         self.route: dict | None = None  # the latest route plan_route returned: the tour is built from this
+        self.events: asyncio.Queue | None = None  # live steps for /chat/stream, if someone is watching
+        self._ids = 0
+        self.started = time.monotonic()
+
+    def emit(self, event: dict) -> None:
+        if self.events is not None:
+            event["t"] = round(time.monotonic() - self.started, 1)  # seconds into the turn
+            self.events.put_nowait(event)
+
+    def new_id(self) -> str:
+        self._ids += 1
+        return f"s{self._ids}"
+
+    def log(self, call: dict, step_id: str | None = None) -> None:
+        """Record a finished tool call (for /chat) and tell the page. Without step_id, the call was
+        made in code on an agent's behalf, so its start is announced here too."""
+        self.tool_calls.append(call)
+        if step_id is None:
+            step_id = self.new_id()
+            self.emit({"type": "call", "id": step_id, "agent": call["agent"], "name": call["name"], "args": call["args"]})
+        self.emit({"type": "result", "id": step_id, "agent": call["agent"], "name": call["name"],
+                   "result": call["result"]})
 
 
 def _title(record: dict) -> str:
@@ -65,19 +89,49 @@ def _title(record: dict) -> str:
     return (record.get("title") or record.get("object_name") or "Untitled").strip()
 
 
+def _args(context) -> dict:
+    try:
+        return json.loads(getattr(context, "tool_arguments", "") or "{}")
+    except json.JSONDecodeError:
+        return {"raw": getattr(context, "tool_arguments", "")}
+
+
 class LogHooks(RunHooks):
-    """Record every tool call, by any agent, as {agent, name, args, result} for /chat's tool_calls."""
+    """Record every tool call, by any agent, as {agent, name, args, result} for /chat's tool_calls,
+    and send each step to the page as it happens: an agent starting, its thinking, each tool call
+    (with the agent's own reason for it), each result."""
+
+    @staticmethod
+    def _step(context) -> str:
+        key = getattr(context, "tool_call_id", None) or str(id(context))
+        steps = context.context.__dict__.setdefault("_steps", {})
+        if key not in steps:
+            steps[key] = context.context.new_id()
+        return steps[key]
+
+    async def on_agent_start(self, context, agent) -> None:
+        context.context.emit({"type": "agent", "agent": agent.name})
+
+    async def on_agent_end(self, context, agent, output) -> None:
+        context.context.emit({"type": "agent_end", "agent": agent.name})
+
+    async def on_llm_end(self, context, agent, response) -> None:
+        for item in response.output:
+            for part in getattr(item, "summary", None) or []:
+                text = getattr(part, "text", "") or ""
+                if text.strip():
+                    context.context.emit({"type": "thought", "agent": agent.name, "text": text.strip()})
+
+    async def on_tool_start(self, context, agent, tool) -> None:
+        context.context.emit({"type": "call", "id": self._step(context), "agent": agent.name, "name": tool.name,
+                              "args": _args(context)})
 
     async def on_tool_end(self, context, agent, tool, result) -> None:
-        try:
-            args = json.loads(getattr(context, "tool_arguments", "") or "{}")
-        except json.JSONDecodeError:
-            args = {"raw": getattr(context, "tool_arguments", "")}
         text = result if isinstance(result, str) else json.dumps(result, default=str)
         # The page draws the tour from plan_route's result, so that one is kept whole
         limit = 30_000 if tool.name == "plan_route" else 4000
-        context.context.tool_calls.append(
-            {"agent": agent.name, "name": tool.name, "args": args, "result": text[:limit]})
+        context.context.log({"agent": agent.name, "name": tool.name, "args": _args(context), "result": text[:limit]},
+                            self._step(context))
 
 
 HOOKS = LogHooks()
@@ -91,12 +145,13 @@ def _dump(x) -> str:
 
 
 @function_tool
-def find_by_accession(accession: str, title_hint: str = "", artist_hint: str = "") -> str:
+def find_by_accession(why: str, accession: str, title_hint: str = "", artist_hint: str = "") -> str:
     """Identify an object from the accession number on its wall label (e.g. '29.100.5').
     Pass the title and artist printed on the label as hints whenever you have them: a misread
     number can match a different real object, and the hints catch that.
 
     Args:
+        why: One short sentence, in plain words for a museum visitor watching you work, on why you are making this call.
         accession: The accession number as read from the label.
         title_hint: The title on the label, if visible.
         artist_hint: The artist or culture on the label, if visible.
@@ -105,10 +160,11 @@ def find_by_accession(accession: str, title_hint: str = "", artist_hint: str = "
 
 
 @function_tool
-def find_by_title(title: str, artist: str = "") -> str:
+def find_by_title(why: str, title: str, artist: str = "") -> str:
     """Find on-view objects by title (and artist), when the label has no readable number.
 
     Args:
+        why: One short sentence, in plain words for a museum visitor watching you work, on why you are making this call.
         title: The title on the label.
         artist: The artist or culture on the label, if any.
     """
@@ -116,24 +172,26 @@ def find_by_title(title: str, artist: str = "") -> str:
 
 
 @function_tool
-def get_object(object_id: int) -> str:
+def get_object(why: str, object_id: int) -> str:
     """Everything the snapshot knows about one object: maker, date, medium, gallery, tags, credit
     line, image, and the titles of its Wikipedia articles (object_wikipedia, artist_wikipedia) if any.
 
     Args:
+        why: One short sentence, in plain words for a museum visitor watching you work, on why you are making this call.
         object_id: The Met object ID.
     """
     return _dump(met_tools.get_object(object_id))
 
 
 @function_tool
-def search_objects(keywords: str = "", department: str = "", gallery: str = "", culture: str = "", artist: str = "",
+def search_objects(why: str, keywords: str = "", department: str = "", gallery: str = "", culture: str = "", artist: str = "",
                    begin_year: int | None = None, end_year: int | None = None, highlights_only: bool = False,
                    limit: int = 20) -> str:
     """Search objects on view now. Every keyword must match (title, artist, culture, medium, tags,
     department...), so use one to three specific words and try synonyms in separate calls.
 
     Args:
+        why: One short sentence, in plain words for a museum visitor watching you work, on why you are making this call.
         keywords: e.g. 'cat', 'horse armor', 'mirror'.
         department: e.g. 'Asian Art', 'Egyptian Art', 'European Paintings', 'Arms and Armor'.
         gallery: an exact gallery number, e.g. '822'.
@@ -149,21 +207,23 @@ def search_objects(keywords: str = "", department: str = "", gallery: str = "", 
 
 
 @function_tool
-def gallery_summary(gallery: str) -> str:
+def gallery_summary(why: str, gallery: str) -> str:
     """What one gallery holds: how many objects, which departments and cultures, and its highlights.
 
     Args:
+        why: One short sentence, in plain words for a museum visitor watching you work, on why you are making this call.
         gallery: The gallery number, e.g. '131'.
     """
     return _dump(met_tools.gallery_summary(gallery))
 
 
 @function_tool
-def run_sql(sql: str) -> str:
+def run_sql(why: str, sql: str) -> str:
     """Run one read-only SELECT over the on-view snapshot, for counting, comparing and ranking.
     The table's columns are listed below.
 
     Args:
+        why: One short sentence, in plain words for a museum visitor watching you work, on why you are making this call.
         sql: A single SELECT statement.
     """
     return _dump(met_tools.run_sql(sql))
@@ -173,41 +233,48 @@ run_sql.description = run_sql.description + "\n" + met_tools.SCHEMA
 
 
 @function_tool
-def snapshot_info() -> str:
-    """When the data snapshot was built, and how many objects are on view in it."""
+def snapshot_info(why: str) -> str:
+    """When the data snapshot was built, and how many objects are on view in it.
+
+    Args:
+        why: One short sentence, in plain words for a museum visitor watching you work, on why you are making this call.
+    """
     return _dump(met_tools.snapshot_info())
 
 
 @function_tool
-def get_wikipedia(title: str) -> str:
+def get_wikipedia(why: str, title: str) -> str:
     """Read an English Wikipedia article by exact title: one from get_object's object_wikipedia or
     artist_wikipedia fields, or one that search_wikipedia found.
 
     Args:
+        why: One short sentence, in plain words for a museum visitor watching you work, on why you are making this call.
         title: The article title, e.g. 'Wheat Field with Cypresses' or 'Ptolemaic Kingdom'.
     """
     return _dump(wikipedia.fetch(title))
 
 
 @function_tool
-def search_wikipedia(query: str) -> str:
+def search_wikipedia(why: str, query: str) -> str:
     """Search English Wikipedia for article titles, with a short snippet of each. Use it to find
     background articles about an object's culture, period, material, technique or subject.
 
     Args:
+        why: One short sentence, in plain words for a museum visitor watching you work, on why you are making this call.
         query: A few words from the object's record, e.g. 'Ptolemaic Egypt bronze cat statuette'.
     """
     return _dump(wikipedia.search(query))
 
 
 @function_tool
-async def plan_route(ctx: RunContextWrapper[Run], object_ids: list[int], extra_ids: list[int] | None = None, start_gallery: str = "",
+async def plan_route(ctx: RunContextWrapper[Run], why: str, object_ids: list[int], extra_ids: list[int] | None = None, start_gallery: str = "",
                      minutes_per_stop: float = 6, budget_minutes: float | None = None) -> str:
     """Order the main stops into a walk through the building and estimate the time; the extras
     continue the same walk after the last main stop, for a visitor with time left. Also checks every
     object against the Met's live API, and drops any that are no longer on view.
 
     Args:
+        why: One short sentence, in plain words for a museum visitor watching you work, on why you are making this call.
         object_ids: The main stops, in any order: about one per 10 minutes of the visitor's time.
         extra_ids: 4 to 6 more good stops for a visitor with time left, in any order. The route
             keeps up to 3 that continue the walk without doubling back.
@@ -329,13 +396,14 @@ async def _wrap_up(data) -> str:
 
 
 @function_tool
-async def research(ctx: RunContextWrapper[Run], theme: str, interests: list[str], slices: list[str],
+async def research(ctx: RunContextWrapper[Run], why: str, theme: str, interests: list[str], slices: list[str],
                    candidates_per_slice: int = 4) -> str:
     """Send Researchers out in parallel, one per slice of the museum, each in a fresh context.
     Waits for all of them and returns their candidates, plus a coverage check done in code: which
     interests were found, which slices came back empty, and whether to search again.
 
     Args:
+        why: One short sentence, in plain words for a museum visitor watching you work, on why you are making this call.
         theme: The visitor's request and constraints, in one or two sentences.
         interests: The visitor's distinct interests, in a word or two each, e.g. ['cats', 'horses'].
         slices: 2 to 5 slices to search, e.g. ['Egyptian Art: cats and lions', 'Asian Art: tigers and cranes'].
@@ -480,8 +548,8 @@ async def _tell(run: Run, object_id: int, context: str) -> dict:
     run.storytellers += 1
     agent = storyteller.clone(name=f"Storyteller {run.storytellers}")
     # The Storyteller reads the record it is given: log it like any other lookup, so its citations check out
-    run.tool_calls.append({"agent": agent.name, "name": "get_object", "args": {"object_id": object_id},
-                           "result": _dump(record)[:4000]})
+    run.log({"agent": agent.name, "name": "get_object", "args": {"object_id": object_id},
+             "result": _dump(record)[:4000]})
     prompt = f"{context}\n\nMet record:\n{_dump(record)}"
     out = {"object_id": object_id, "agent": agent.name, "title": _title(record),
            "maker": record.get("artist") or record.get("culture") or (record.get("department") or "").removesuffix(" Art"), "date": record.get("object_date") or ""}
@@ -490,8 +558,8 @@ async def _tell(run: Run, object_id: int, context: str) -> dict:
                                   error_handlers={"max_turns": _wrap_up})
         story = _tag_look_for(_parse_story(str(result.final_output)), object_id)
         report = citations.check(story.get("story", "") + "\n" + story.get("look_for", ""), run.tool_calls)
-        run.tool_calls.append({"agent": "Citation check", "name": "check_citations",
-                               "args": {"object_id": object_id}, "result": _dump(report)})
+        run.log({"agent": "Citation check", "name": "check_citations",
+                 "args": {"object_id": object_id}, "result": _dump(report)})
         if not report["ok"]:
             fix = ("A citation check of your story found problems. Fix them. For details_not_in_cited_source: the "
                    "listed names or numbers are not in the source that sentence cites, so tag the sentence with the "
@@ -502,8 +570,8 @@ async def _tell(run: Run, object_id: int, context: str) -> dict:
                                       context=run, hooks=HOOKS, max_turns=4, error_handlers={"max_turns": _wrap_up})
             story = _tag_look_for(_parse_story(str(result.final_output)), object_id) or story
             report = citations.check(story.get("story", "") + "\n" + story.get("look_for", ""), run.tool_calls)
-            run.tool_calls.append({"agent": "Citation check", "name": "check_citations",
-                                   "args": {"object_id": object_id, "revised": True}, "result": _dump(report)})
+            run.log({"agent": "Citation check", "name": "check_citations",
+                     "args": {"object_id": object_id, "revised": True}, "result": _dump(report)})
         done = {**out, **story, "citations_ok": report["ok"]}
         if story.get("story"):
             run.stories[object_id] = done
@@ -570,11 +638,12 @@ def _candidates(evidence_json: str) -> list[dict]:
 
 
 @function_tool
-async def tell_story(ctx: RunContextWrapper[Run], object_id: int, question: str = "") -> str:
+async def tell_story(ctx: RunContextWrapper[Run], why: str, object_id: int, question: str = "") -> str:
     """Have a Storyteller explain one object in plain language, with Wikipedia background on its
     culture, period or material. Use it for "what is this?" questions; pass its result to write_answer.
 
     Args:
+        why: One short sentence, in plain words for a museum visitor watching you work, on why you are making this call.
         object_id: The Met object ID.
         question: What the visitor asked, if anything specific.
     """
@@ -630,8 +699,8 @@ async def _write(run: Run, prompt: str) -> str:
     result = await Runner.run(writer, prompt, context=run, hooks=HOOKS, max_turns=2)
     draft = _fix_tags(str(result.final_output))
     report = citations.check(draft, run.tool_calls)
-    run.tool_calls.append({"agent": "Citation check", "name": "check_citations", "args": {"draft": draft[:500]},
-                           "result": _dump(report)})
+    run.log({"agent": "Citation check", "name": "check_citations", "args": {"draft": draft[:500]},
+             "result": _dump(report)})
     if report["ok"]:
         return draft
     fix = (f"{prompt}\n\nYour draft:\n{draft}\n\nA citation check found problems. Fix them: add a tag to each "
@@ -641,18 +710,19 @@ async def _write(run: Run, prompt: str) -> str:
            f"\n{_dump(report)}")
     result = await Runner.run(writer, fix, context=run, hooks=HOOKS, max_turns=2)
     final = _fix_tags(str(result.final_output))
-    run.tool_calls.append({"agent": "Citation check", "name": "check_citations", "args": {"draft": final[:500]},
-                           "result": _dump(citations.check(final, run.tool_calls))})
+    run.log({"agent": "Citation check", "name": "check_citations", "args": {"draft": final[:500]},
+             "result": _dump(citations.check(final, run.tool_calls))})
     return final
 
 
 @function_tool
-async def write_tour(ctx: RunContextWrapper[Run], request: str, route_json: str, evidence_json: str) -> str:
+async def write_tour(ctx: RunContextWrapper[Run], why: str, request: str, route_json: str, evidence_json: str) -> str:
     """Write the final tour: a Storyteller per stop (in parallel) explains each object in plain
     language with Wikipedia background; the stops are laid out in walking order, and the Writer adds
     the title, introduction and closing notes. Returns the tour text: reply with it as it is.
 
     Args:
+        why: One short sentence, in plain words for a museum visitor watching you work, on why you are making this call.
         request: The visitor's request and constraints.
         route_json: The JSON that plan_route returned.
         evidence_json: The candidates and evidence for the chosen stops (from research), as JSON.
@@ -757,12 +827,13 @@ def _assemble(route_data: dict, stories: dict, evidence_json: str) -> str:
 
 
 @function_tool
-async def write_answer(ctx: RunContextWrapper[Run], question: str, evidence_json: str) -> str:
+async def write_answer(ctx: RunContextWrapper[Run], why: str, question: str, evidence_json: str) -> str:
     """Have the Writer answer a question about an object or the collection from evidence you gathered
     (tool results: object records, query results, Wikipedia text, and any caveats). Returns the answer:
     reply with it as it is.
 
     Args:
+        why: One short sentence, in plain words for a museum visitor watching you work, on why you are making this call.
         question: The visitor's question, plus anything you need to tell them (e.g. a number was misread).
         evidence_json: The tool results the answer rests on, as JSON. Include object_id on every object.
     """
@@ -845,13 +916,15 @@ Always:
 )
 
 
-async def chat(history: list, message: str | list) -> tuple[str, list[dict], list]:
-    """Run one visitor turn. Returns (reply, tool_calls, new history).
+async def chat(history: list, message: str | list, events: asyncio.Queue | None = None) -> tuple[str, list[dict], list]:
+    """Run one visitor turn. Returns (reply, tool_calls, new history). With an events queue, every
+    step is also sent there as it happens (see LogHooks), for /chat/stream.
 
     If the Lead runs out of turns, the visitor gets an honest message and the tool calls so far,
     instead of an error page.
     """
     run = Run()
+    run.events = events
     turn = history + [{"role": "user", "content": message}]
     try:
         result = await Runner.run(lead, turn, context=run, hooks=HOOKS, max_turns=LEAD_MAX_TURNS)
