@@ -56,6 +56,12 @@ class Run:
         self.stories: dict[int, dict] = {}  # object_id -> the Storyteller's checked story
         self.found: dict[str, dict] = {}   # interest -> {"direct": n, "related": n}, over all rounds
         self.needs_more: dict | None = None  # set when the latest findings leave a gap
+        self.route: dict | None = None  # the latest route plan_route returned: the tour is built from this
+
+
+def _title(record: dict) -> str:
+    """The object's title; some records have none, so fall back on what the object is ('Relief')."""
+    return (record.get("title") or record.get("object_name") or "Untitled").strip()
 
 
 class LogHooks(RunHooks):
@@ -219,7 +225,7 @@ async def plan_route(ctx: RunContextWrapper[Run], object_ids: list[int], extra_i
         if "error" in o:
             missing.append(oid)
         else:
-            stops.append({"object_id": oid, "title": o["title"], "artist": o["artist"], "gallery": o["gallery"],
+            stops.append({"object_id": oid, "title": _title(o), "artist": o["artist"], "gallery": o["gallery"],
                           "image_small_url": o.get("image_small_url"), "met_url": o["met_url"]})
     live = await _verify_live([s["object_id"] for s in stops])
     moved = []
@@ -247,6 +253,8 @@ async def plan_route(ctx: RunContextWrapper[Run], object_ids: list[int], extra_i
         result["notes"].append(f"Not in the on-view snapshot, so left out: {missing}")
     if any(s.get("live_check") == "unavailable" for s in keep):
         result["notes"].append("The Met's live API did not answer for some stops; their galleries come from the snapshot.")
+    if result.get("stops") or result.get("extras"):
+        run.route = result
     return _dump(result)
 
 
@@ -473,7 +481,7 @@ async def _tell(run: Run, object_id: int, context: str) -> dict:
     run.tool_calls.append({"agent": agent.name, "name": "get_object", "args": {"object_id": object_id},
                            "result": _dump(record)[:4000]})
     prompt = f"{context}\n\nMet record:\n{_dump(record)}"
-    out = {"object_id": object_id, "agent": agent.name, "title": record.get("title"),
+    out = {"object_id": object_id, "agent": agent.name, "title": _title(record),
            "maker": record.get("artist") or record.get("culture") or (record.get("department") or "").removesuffix(" Art"), "date": record.get("object_date") or ""}
     try:
         result = await Runner.run(agent, prompt, context=run, hooks=HOOKS, max_turns=STORYTELLER_MAX_TURNS,
@@ -646,16 +654,22 @@ async def write_tour(ctx: RunContextWrapper[Run], request: str, route_json: str,
         evidence_json: The candidates and evidence for the chosen stops (from research), as JSON.
     """
     run = ctx.context
-    route_data: dict = {}
-    try:
-        route_data = json.loads(route_json)
-        stops = [s["object_id"] for key in ("stops", "extras", "cloisters_stops") for s in route_data.get(key, [])]
-    except (ValueError, KeyError, TypeError, AttributeError):
-        stops = [int(c["object_id"]) for c in _candidates(evidence_json) if str(c.get("object_id")).isdigit()]
+    # Build from the route plan_route actually returned, not the Lead's copy of it: a copy can be
+    # cut short or reworded, and a tour built from it would have no stops.
+    route_data = run.route or {}
+    if not route_data:
+        try:
+            parsed = json.loads(route_json)
+            route_data = parsed if isinstance(parsed, dict) else {}
+        except ValueError:
+            pass
+    stops = [s["object_id"] for key in ("stops", "extras", "cloisters_stops") for s in route_data.get(key, [])
+             if isinstance(s, dict) and "object_id" in s]
+    if not stops:
+        return ("I couldn't put a walking route together this time, so I won't show you a tour without its stops. "
+                "Please ask again, and I'll plan it from scratch.")
     stories = await tell_stories(run, list(dict.fromkeys(stops)), request, evidence_json)
     by_id = {s["object_id"]: s for s in stories}
-    if not isinstance(route_data, dict):
-        route_data = {}
     unmet = [i for i, n in run.found.items() if n["direct"] == 0]
     missing = ("" if not unmet else
                f"\n\nThe Met has nothing on view that directly matches: {', '.join(unmet)}. The introduction's first "

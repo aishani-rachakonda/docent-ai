@@ -5,168 +5,244 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cut">
 <title>Docent AI</title>
 <meta name="description" content="A pocket guide to what is on view at The Met right now: personal tours, label lookups, and answers you can check.">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,650&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
 <style>
 :root {
-  --bg: #f6f2ea; --surface: #fffdf8; --surface-2: #efe8db; --ink: #1f1b16; --muted: #6b6257;
-  --line: #ddd3c3; --accent: #9c2f1f; --accent-ink: #fff; --accent-soft: #f3dcd4;
-  --ok: #2f6b3a; --warn: #8a5a00; --shadow: 0 1px 2px rgba(40,30,20,.06), 0 6px 20px rgba(40,30,20,.06);
+  --bg: #f6f2ea; --surface: #fffdf8; --surface-2: #efe8db; --ink: #1f1b16; --ink-2: #4a4239; --muted: #6b6257;
+  --line: #d6cab6; --rule: #b9ab94; --accent: #9c2f1f; --accent-ink: #fff; --accent-soft: #f3dcd4;
+  --ok: #2f6b3a; --warn: #8a5a00; --frame: #e9e1d2;
   --agent-guide: #9c2f1f; --agent-research: #2f5d8a; --agent-writer: #2f6b3a; --agent-check: #7a5a8c; --agent-story: #a3621c;
-  --radius: 14px;
+  --serif: "Times New Roman", Times, "Liberation Serif", serif;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #171411; --surface: #211d19; --surface-2: #2b2621; --ink: #f1ebe2; --muted: #b3a998;
-    --line: #3a332c; --accent: #e07a5f; --accent-ink: #1b0f0b; --accent-soft: #3d241d;
-    --ok: #7fc28b; --warn: #e2b053; --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 20px rgba(0,0,0,.25);
+    --bg: #171411; --surface: #211d19; --surface-2: #2b2621; --ink: #f1ebe2; --ink-2: #d6ccbd; --muted: #b3a998;
+    --line: #3a332c; --rule: #5a4f43; --accent: #e07a5f; --accent-ink: #1b0f0b; --accent-soft: #3d241d;
+    --ok: #7fc28b; --warn: #e2b053; --frame: #221e1a;
     --agent-guide: #e07a5f; --agent-research: #7fb0e0; --agent-writer: #7fc28b; --agent-check: #c3a2d6; --agent-story: #e3a764;
   }
 }
 :root[data-theme="dark"] {
-  --bg: #171411; --surface: #211d19; --surface-2: #2b2621; --ink: #f1ebe2; --muted: #b3a998;
-  --line: #3a332c; --accent: #e07a5f; --accent-ink: #1b0f0b; --accent-soft: #3d241d;
-  --ok: #7fc28b; --warn: #e2b053; --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 20px rgba(0,0,0,.25);
+  --bg: #171411; --surface: #211d19; --surface-2: #2b2621; --ink: #f1ebe2; --ink-2: #d6ccbd; --muted: #b3a998;
+  --line: #3a332c; --rule: #5a4f43; --accent: #e07a5f; --accent-ink: #1b0f0b; --accent-soft: #3d241d;
+  --ok: #7fc28b; --warn: #e2b053; --frame: #221e1a;
   --agent-guide: #e07a5f; --agent-research: #7fb0e0; --agent-writer: #7fc28b; --agent-check: #c3a2d6; --agent-story: #e3a764;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; }
-body { background: var(--bg); color: var(--ink); font: 16px/1.55 Inter, system-ui, sans-serif; }
-a { color: var(--accent); }
-.wrap { max-width: 860px; margin: 0 auto; padding: 0 16px; }
-h1, h2, h3 { font-family: Fraunces, Georgia, serif; font-weight: 650; line-height: 1.15; }
+body { background: var(--bg); color: var(--ink); font: 18px/1.65 var(--serif); -webkit-font-smoothing: antialiased; }
+button, textarea, input { font-family: var(--serif); }
+a { color: var(--accent); text-underline-offset: 2px; }
+.wrap { max-width: 780px; margin: 0 auto; padding: 0 16px; }
+h1, h2, h3 { font-family: var(--serif); font-weight: 400; line-height: 1.2; }
+/* Small capitals with wide spacing: the museum's label voice */
+.caps, .kicker, .stopno, .lookfor b, .listen, .send, .tour-bar .sum, .extras-head, details.work summary {
+  font-variant-caps: all-small-caps; letter-spacing: .14em; }
 
-/* Intro */
-header { padding: 40px 0 8px; }
-.kicker { font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
-header h1 { font-size: clamp(32px, 6vw, 46px); margin: 6px 0 10px; }
-header p.lede { font-size: 18px; color: var(--muted); margin: 0 0 20px; max-width: 640px; }
-.how { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 0 0 8px; }
-.how div { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; }
-.how b { display: block; font-family: Fraunces, Georgia, serif; font-size: 17px; margin-bottom: 4px; }
-.how span { color: var(--muted); font-size: 14px; }
+/* Intro: centered, like an exhibition title wall */
+header { padding: 56px 0 8px; text-align: center; }
+.kicker { font-size: 17px; color: var(--accent); }
+header h1 { font-size: clamp(38px, 7vw, 58px); margin: 6px 0 0; letter-spacing: .16em; text-transform: uppercase; }
+header h1::after { content: ""; display: block; width: 72px; height: 1px; background: var(--ink); margin: 20px auto 0; }
+header p.lede { font-size: 20px; font-style: italic; color: var(--ink-2); margin: 20px auto 30px; max-width: 600px; }
+.how { display: grid; grid-template-columns: repeat(3, 1fr); margin: 0 0 8px; text-align: left;
+  border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+.how div { padding: 18px 18px 20px; }
+.how div + div { border-left: 1px solid var(--line); }
+.how b { display: block; font-weight: 400; font-size: 17px; color: var(--accent);
+  font-variant-caps: all-small-caps; letter-spacing: .14em; margin-bottom: 6px; }
+.how span { color: var(--ink-2); font-size: 16px; }
 body.started .how, body.started .lede { display: none; }
-body.started header { padding-top: 20px; }
-.fine { font-size: 13px; color: var(--muted); margin: 10px 0 0; }
+body.started header { padding-top: 28px; }
+body.started header h1 { font-size: clamp(28px, 5vw, 36px); }
+body.started header h1::after { margin-top: 14px; }
+.fine { font-size: 14px; font-style: italic; color: var(--muted); margin: 14px auto 0; max-width: 620px; }
 
-/* Conversation */
-#thread { padding: 18px 0 150px; display: flex; flex-direction: column; gap: 16px; }
+/* Conversation: a printed guide, not chat bubbles */
+#thread { padding: 24px 0 170px; display: flex; flex-direction: column; }
 .msg { max-width: 100%; }
-.msg.user { align-self: flex-end; max-width: 85%; background: var(--accent); color: var(--accent-ink);
-  border-radius: var(--radius) var(--radius) 4px var(--radius); padding: 10px 14px; }
-.msg.user img { display: block; max-width: 220px; border-radius: 8px; margin-bottom: 6px; }
-.msg.guide { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 16px 18px; box-shadow: var(--shadow); }
-.msg.guide h1, .msg.guide h2 { font-size: 24px; margin: 4px 0 8px; }
-.msg.guide h3 { font-size: 18px; margin: 18px 0 2px; }
-.msg.guide p { margin: 6px 0; }
-.msg.guide ul { padding-left: 20px; }
-.cite { display: inline-block; font-size: 11px; font-weight: 600; line-height: 1; padding: 3px 6px; margin: 0 1px;
-  border-radius: 999px; background: var(--surface-2); color: var(--muted); text-decoration: none; vertical-align: 2px; }
-.cite:hover { background: var(--accent-soft); color: var(--ink); }
-.error { color: var(--warn); }
+.msg.user { padding: 34px 0 6px; border-top: 1px solid var(--rule); font-style: italic; font-size: 21px;
+  color: var(--ink-2); text-align: center; }
+.msg.user:first-child { border-top: 0; }
+.msg.user::before { content: "Your request"; display: block; font-style: normal; font-size: 15px; color: var(--accent);
+  font-variant-caps: all-small-caps; letter-spacing: .14em; margin-bottom: 4px; }
+.msg.user img { display: block; max-width: 220px; margin: 6px auto; border: 1px solid var(--line); padding: 6px; background: var(--frame); }
+.msg.guide { padding: 14px 0 34px; }
+.msg.guide h1, .msg.guide h2 { font-size: 32px; margin: 12px 0 12px; text-align: center; }
+.msg.guide h3 { font-size: 22px; margin: 26px 0 4px; }
+.msg.guide p { margin: 10px 0; }
+.msg.guide ul { padding-left: 22px; }
+.cite { font-size: 14px; line-height: 1; margin: 0 1px 0 2px; vertical-align: super; color: var(--accent);
+  text-decoration: none; font-variant-caps: all-small-caps; letter-spacing: .08em; }
+a.cite:hover { text-decoration: underline; }
+.error { color: var(--warn); font-style: italic; text-align: center; }
 
 /* Tags */
-.tag { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 999px; margin-top: 6px; margin-right: 4px; }
-.tag.opt { background: var(--accent-soft); color: var(--ink); }
-.tag.live { background: transparent; border: 1px solid var(--ok); color: var(--ok); }
-.tag.moved { border: 1px solid var(--warn); color: var(--warn); }
+.tag { display: inline-block; font-size: 13px; padding: 0 6px; margin-top: 6px; margin-right: 4px;
+  font-variant-caps: all-small-caps; letter-spacing: .1em; border: 1px solid currentColor; }
+.tag.opt { color: var(--accent); }
+.tag.live { color: var(--ok); }
+.tag.moved { color: var(--warn); }
 
-/* Tour cards: one per stop, picture then story */
-.tour-bar { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;
-  margin: 14px 0 4px; padding: 10px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
-.tour-bar .sum { font-size: 14px; color: var(--muted); }
-.card { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--bg);
-  margin: 16px 0; transition: box-shadow .2s, border-color .2s; }
-.card.speaking { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
-.card .photo { display: block; position: relative; background: var(--surface-2); }
-.card .photo img { display: block; width: 100%; max-height: 440px; object-fit: contain; }
-.card .photo.none { padding: 22px 16px 18px; text-align: center; color: var(--muted); font-size: 13px; }
-.card .num { position: absolute; top: 10px; left: 10px; background: var(--accent); color: var(--accent-ink);
-  font-weight: 600; font-size: 14px; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; }
-.card .photo.none .num { position: static; margin: 0 auto 8px; }
-.card .content { padding: 14px 16px 16px; }
-.card.extra { border-style: dashed; background: transparent; }
-.card.extra .photo img { max-height: 280px; }
-.card.extra .num { background: var(--surface); color: var(--accent); border: 1.5px solid var(--accent); }
-.msg.guide h2.extras-head { margin: 28px 0 2px; font-size: 22px; }
-.extras-head + .more { margin-top: 0; }
-.msg.guide .card h3 { margin: 0; font-size: 21px; }
-.card .orig { font-size: 13px; color: var(--muted); margin-top: 2px; }
-.card .meta { font-size: 14px; color: var(--muted); margin: 4px 0 2px; }
-.card .walk { font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-bottom: 8px; }
+/* Tour: one stop per page of the guide, picture framed, then its label and story */
+.tour-bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin: 22px 0 6px; padding: 12px 0; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--rule); }
+.tour-bar .sum { font-size: 16px; color: var(--ink); }
+.card { margin: 0; padding: 40px 0 34px; border-bottom: 1px solid var(--line); }
+.card.speaking .content { border-left: 2px solid var(--accent); padding-left: 16px; margin-left: -18px; }
+.card .photo { display: block; background: var(--frame); border: 1px solid var(--line); padding: 22px; }
+.card .photo img { display: block; width: 100%; max-height: 460px; object-fit: contain;
+ }
+.card .photo.none { padding: 18px; text-align: center; color: var(--muted); font-size: 15px; font-style: italic; }
+.card .content { padding: 20px 0 0; }
+.stopno { display: block; font-size: 16px; color: var(--accent); margin-bottom: 2px; }
+.card.extra .photo { background: transparent; border-style: dashed; }
+.card.extra .photo img { max-height: 300px; }
+.msg.guide h2.extras-head { margin: 48px 0 0; font-size: 26px; padding-top: 20px; border-top: 1px solid var(--ink); }
+.extras-head + .more { margin-top: 4px; text-align: center; font-style: italic; }
+.msg.guide .card h3 { margin: 0; font-size: 28px; line-height: 1.2; }
+.card .orig { font-size: 18px; font-style: italic; color: var(--ink-2); margin-top: 4px; }
+.card .meta { font-size: 17px; color: var(--ink); margin: 8px 0 2px; }
+.card .meta em { font-style: normal; }
+.card .walk { font-size: 15px; color: var(--ink-2); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px;
+  padding-bottom: 14px; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
 .card .walk .tag { margin-top: 0; }
-.lookfor { background: var(--accent-soft); border-radius: 10px; padding: 9px 12px; margin: 10px 0 0 !important; }
-.lookfor b { font-family: Fraunces, Georgia, serif; font-weight: 650; }
-.actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
-.listen { border: 1px solid var(--line); background: var(--surface-2); color: var(--ink); border-radius: 999px;
-  padding: 7px 14px 7px 11px; font: 600 14px Inter, system-ui, sans-serif; cursor: pointer;
-  display: inline-flex; align-items: center; gap: 7px; }
-.listen:hover { border-color: var(--accent); }
-.listen[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.lookfor { border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); padding: 12px 0; margin: 18px 0 0 !important;
+  font-style: italic; }
+.lookfor b { display: block; font-style: normal; font-weight: 400; color: var(--accent); font-size: 16px; }
+.actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 18px; }
+.listen { border: 1px solid var(--ink); background: transparent; color: var(--ink); border-radius: 0;
+  padding: 6px 16px 7px 12px; font-size: 16px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }
+.listen:hover { background: var(--ink); color: var(--bg); }
+.listen[aria-pressed="true"], .listen.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.listen.primary:hover { background: var(--ink); border-color: var(--ink); color: var(--bg); }
 .listen svg { flex: none; }
-.listen.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
-.more { font-size: 13px; color: var(--muted); }
+.more { font-size: 15px; color: var(--ink-2); }
 .answer-tools { display: flex; justify-content: flex-end; margin: -4px 0 4px; }
 
 /* Show the work */
-details.work { margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 10px; }
-details.work summary { cursor: pointer; font-size: 14px; color: var(--muted); }
-.agents { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-top: 10px; }
-.agent { border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: var(--bg); min-width: 0; }
-.agent .name { font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
-.agent .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--agent-guide); }
+details.work { margin-top: 26px; border-top: 1px solid var(--line); padding-top: 12px; }
+details.work summary { cursor: pointer; font-size: 16px; color: var(--ink-2); }
+.agents { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0; margin-top: 12px;
+  border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
+.agent { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 10px 12px; min-width: 0; }
+.agent .name { font-size: 15px; display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+  font-variant-caps: all-small-caps; letter-spacing: .1em; }
+.agent .dot { width: 8px; height: 8px; background: var(--agent-guide); }
 .agent.research .dot { background: var(--agent-research); } .agent.writer .dot { background: var(--agent-writer); }
 .agent.check .dot { background: var(--agent-check); } .agent.story .dot { background: var(--agent-story); }
 .call { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 4px 0; border-top: 1px solid var(--line); }
 .call:first-of-type { border-top: 0; }
 .call details summary { cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .call pre { white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; background: var(--surface);
-  padding: 6px; border-radius: 6px; margin: 4px 0 0; }
+  padding: 6px; margin: 4px 0 0; }
 
-/* Thinking */
-.thinking { color: var(--muted); font-size: 15px; display: flex; align-items: center; gap: 10px; }
-.pulse { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
-@keyframes pulse { 0%, 100% { opacity: .25; transform: scale(.8); } 50% { opacity: 1; transform: scale(1); } }
-@media (prefers-reduced-motion: reduce) { .pulse { animation: none; } }
+/* Waiting */
+.thinking { color: var(--ink-2); font-size: 18px; font-style: italic; text-align: center; padding: 26px 0; }
+.thinking .elapsed { font-style: normal; font-size: 15px; color: var(--muted); margin-left: 8px; font-variant-numeric: tabular-nums; }
 
 /* Suggestions */
-.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 0; }
-.chip { border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 999px;
-  padding: 8px 12px; font: inherit; font-size: 14px; cursor: pointer; text-align: left; }
-.chip:hover { border-color: var(--accent); }
+.chips { display: grid; grid-template-columns: 1fr 1fr; gap: 0; margin: 26px 0 0; text-align: left;
+  border-top: 1px solid var(--line); }
+.chip { border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--ink); border-radius: 0;
+  padding: 12px 14px; font-size: 17px; font-style: italic; cursor: pointer; text-align: left; }
+.chip:nth-child(odd) { border-right: 1px solid var(--line); }
+.chip::before { content: "\2192\00a0"; font-style: normal; color: var(--accent); }
+.chip:hover { background: var(--surface); }
 
-/* Composer */
-.composer { position: fixed; left: 0; right: 0; bottom: 0; background: linear-gradient(to top, var(--bg) 70%, transparent);
-  padding: 18px 0 calc(14px + env(safe-area-inset-bottom)); }
-.bar { display: flex; gap: 8px; align-items: flex-end; background: var(--surface); border: 1px solid var(--line);
-  border-radius: 18px; padding: 8px; box-shadow: var(--shadow); }
-.bar textarea { flex: 1; border: 0; background: transparent; color: var(--ink); font: inherit; resize: none;
-  min-height: 24px; max-height: 140px; padding: 6px 4px; outline: none; }
-.icon-btn, .send { border: 0; border-radius: 12px; height: 40px; min-width: 40px; cursor: pointer; font: inherit; font-weight: 600; }
-.icon-btn { background: var(--surface-2); color: var(--ink); display: grid; place-items: center; }
-.send { background: var(--accent); color: var(--accent-ink); padding: 0 16px; }
-.send:disabled { opacity: .5; cursor: default; }
-.preview { display: none; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); margin: 0 0 8px 4px; }
-.preview img { height: 44px; border-radius: 6px; }
-.preview button { border: 0; background: none; color: var(--accent); cursor: pointer; font: inherit; }
+/* Composer: a plain bar under a single rule */
+.composer { position: fixed; left: 0; right: 0; bottom: 0; background: var(--bg); border-top: 1px solid var(--rule);
+  padding: 12px 0 calc(12px + env(safe-area-inset-bottom)); }
+.bar { display: flex; gap: 10px; align-items: flex-end; }
+.bar textarea { flex: 1; border: 0; border-bottom: 1px solid var(--ink); border-radius: 0; background: transparent;
+  color: var(--ink); font-size: 18px; resize: none; min-height: 40px; max-height: 140px; padding: 8px 2px; outline: none; }
+.bar textarea::placeholder { font-style: italic; color: var(--muted); }
+.bar textarea:focus { border-bottom-color: var(--accent); }
+.icon-btn, .send { border-radius: 0; height: 40px; min-width: 40px; cursor: pointer; }
+.icon-btn { border: 1px solid var(--line); background: transparent; color: var(--ink); display: grid; place-items: center; }
+.icon-btn:hover { border-color: var(--ink); }
+.send { border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); padding: 0 20px; font-size: 17px; }
+.send:hover:not(:disabled) { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+.send:disabled { opacity: .45; cursor: default; }
+.preview { display: none; align-items: center; gap: 8px; font-size: 15px; font-style: italic; color: var(--ink-2); margin: 0 0 8px 2px; }
+.preview img { height: 44px; border: 1px solid var(--line); }
+.preview button { border: 0; background: none; color: var(--accent); cursor: pointer; font-size: 15px; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 
 @media (max-width: 640px) {
-  header { padding-top: 24px; }
+  body { font-size: 17px; }
+  header { padding-top: 32px; }
   .how { grid-template-columns: 1fr; }
-  .msg.guide { padding: 12px; }
-  .card .content { padding: 12px 12px 14px; }
+  .how div + div { border-left: 0; border-top: 1px solid var(--line); }
+  .chips { grid-template-columns: 1fr; }
+  .chip:nth-child(odd) { border-right: 0; }
+  .card .photo { padding: 12px; }
+  .msg.guide .card h3 { font-size: 24px; }
+  .card.speaking .content { margin-left: -12px; padding-left: 10px; }
+}
+
+/* Stop card, top to bottom: where it is, listen, what to notice, then the story */
+.card { scroll-margin-top: 12px; }
+.wayfind { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin: 16px 0 0; padding: 12px 16px;
+  background: var(--surface-2); border-left: 3px solid var(--accent); }
+.wayfind .gal { display: inline-flex; align-items: center; gap: 7px; font-size: 23px; font-weight: 700; color: var(--ink);
+  letter-spacing: .02em; }
+.wayfind .gal svg { color: var(--accent); }
+.way-bits { font-size: 17px; color: var(--ink-2); }
+.way-flags { display: inline-flex; gap: 8px; flex-wrap: wrap; }
+.flag { display: inline-flex; align-items: center; gap: 4px; font-size: 15px; font-variant-caps: all-small-caps; letter-spacing: .1em; }
+.flag.live { color: var(--ok); }
+.flag.moved { color: var(--warn); }
+.flag.opt { color: var(--accent); }
+.card .actions { margin-top: 14px; }
+.listen.stop-listen { background: var(--accent); color: var(--accent-ink); border-color: var(--accent);
+  font-size: 18px; padding: 10px 22px 11px 18px; }
+.listen.stop-listen:hover { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+.msg.guide .lookfor { margin: 18px 0 0 !important; padding: 14px 18px; border: 0; border-left: 3px solid var(--accent);
+  background: var(--accent-soft); font-style: normal; font-size: 19px; line-height: 1.5; }
+.lookfor b { display: flex; align-items: center; gap: 7px; margin-bottom: 4px; }
+.lookfor b svg { flex: none; }
+.story-wrap { margin-top: 24px; }
+.story-head { font-size: 16px; color: var(--ink-2); font-variant-caps: all-small-caps; letter-spacing: .14em;
+  border-bottom: 1px solid var(--line); padding-bottom: 4px; margin-bottom: 4px; }
+.cite { font-size: 12px; color: var(--muted); opacity: .85; }
+
+/* Tour overview: the whole walk at a glance */
+.overview { margin: 26px 0 8px; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--rule); }
+.ov-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px 0; }
+.ov-sum { font-size: 18px; color: var(--ink); }
+.ov-label { display: block; font-size: 15px; color: var(--accent); font-variant-caps: all-small-caps; letter-spacing: .14em; }
+.ov-list { list-style: none; margin: 0; padding: 0 0 6px; }
+.ov-list a { display: grid; grid-template-columns: 34px 1fr auto; gap: 10px; align-items: baseline; padding: 9px 4px;
+  border-top: 1px solid var(--line); color: var(--ink); text-decoration: none; }
+.ov-list a:hover { background: var(--surface); }
+.ov-n { font-size: 20px; color: var(--accent); text-align: center; }
+.ov-t { font-size: 18px; }
+.ov-g { font-size: 15px; color: var(--ink-2); white-space: nowrap; font-variant-caps: all-small-caps; letter-spacing: .08em; }
+.ov-sep { font-size: 15px; color: var(--accent); font-variant-caps: all-small-caps; letter-spacing: .14em;
+  padding: 14px 4px 4px; border-top: 1px solid var(--line); }
+.ov-list li.extra .ov-t { font-style: italic; color: var(--ink-2); }
+
+/* Before you go: folded */
+details.notes { margin: 30px 0 0; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); padding: 0; }
+details.notes summary { cursor: pointer; padding: 12px 0; font-size: 17px; color: var(--ink); list-style: none; }
+details.notes summary::-webkit-details-marker { display: none; }
+details.notes summary::after { content: " \25B8"; color: var(--accent); }
+details.notes[open] summary::after { content: " \25BE"; }
+details.notes ul { margin-top: 0; font-size: 16px; color: var(--ink-2); }
+
+@media (max-width: 640px) {
+  .listen.stop-listen, .ov-top .listen { width: 100%; justify-content: center; }
+  .wayfind .gal { font-size: 21px; }
+  .ov-list a { grid-template-columns: 26px 1fr; }
+  .ov-g { grid-column: 2; }
 }
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
-    <div class="kicker">For visitors to The Met Fifth Avenue</div>
     <h1>Docent AI</h1>
     <p class="lede">A pocket guide built on what is actually on view today: a tour planned around your interests and time,
       a quick answer when a label catches your eye, and numbers you can check.</p>
@@ -175,7 +251,7 @@ details.work summary { cursor: pointer; font-size: 14px; color: var(--muted); }
       <div><b>Ask about a label</b><span>Snap the wall label or type its number. A misread number is caught by checking the title.</span></div>
       <div><b>Ask the collection</b><span>"How many Monets are on view?" Answers come from the data, with every fact linked to its source.</span></div>
     </div>
-    <p class="fine" id="snapshot">Unofficial. Built on The Met's Open Access data; not affiliated with The Metropolitan Museum of Art.</p>
+    <p class="fine">An independent guide, drawn from The Met’s Open Access collection. Not affiliated with The Metropolitan Museum of Art.</p>
     <div class="chips" id="chips">
       <button class="chip">I have an hour and love animals, especially cats and horses. Plan me a tour.</button>
       <button class="chip">90 minutes on power and death in the ancient world</button>
@@ -229,15 +305,11 @@ window.addEventListener("DOMContentLoaded", () => {
   shown.forEach(m => m.role === "user" ? addUser(m.text, null) : thread.appendChild(renderGuide(m.data)));
 });
 
-fetch("/snapshot").then(r => r.json()).then(s => {
-  const d = s.data_as_of || "";
-  if (d) document.getElementById("snapshot").textContent =
-    `Unofficial. Built on The Met's Open Access data (${s.objects_on_view.toLocaleString()} objects on view, updated ${d}); not affiliated with The Metropolitan Museum of Art.`;
-}).catch(() => {});
 
 document.querySelectorAll(".chip").forEach(c => c.addEventListener("click", () => { input.value = c.textContent; ask(); }));
 form.addEventListener("submit", e => { e.preventDefault(); ask(); });
 input.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(); } });
+if (matchMedia("(max-width: 640px)").matches) input.placeholder = "Ask the docent…";
 input.addEventListener("input", () => { input.style.height = "auto"; input.style.height = input.scrollHeight + "px"; });
 
 // Shrink the photo before sending: a label only needs to be legible
@@ -261,7 +333,7 @@ document.getElementById("clearImg").addEventListener("click", clearImage);
 function clearImage() { imageData = null; photo.value = ""; preview.style.display = "none"; }
 
 const WAITING = [
-  "Reading your request…", "Researchers are searching the galleries in parallel…",
+  "Consulting the collection…", "Researchers are searching the galleries in parallel…",
   "Checking each object against the Met's live data…", "Ordering the stops by gallery…",
   "Storytellers are reading up on each stop…", "Writing the tour and checking every citation…",
 ];
@@ -278,12 +350,12 @@ async function ask() {
   send.disabled = true;
 
   const wait = el("div", "msg guide thinking");
-  wait.innerHTML = '<span class="pulse"></span><span></span>';
+  wait.innerHTML = '<span class="said"></span><span class="elapsed"></span>';
   thread.appendChild(wait);
   let i = 0, started = Date.now();
-  const tick = () => { wait.lastChild.textContent = `${WAITING[Math.min(i++, WAITING.length - 1)]} ${Math.round((Date.now() - started) / 1000)}s`; };
-  tick(); const timer = setInterval(tick, 12000); const clock = setInterval(() => {
-    wait.lastChild.textContent = wait.lastChild.textContent.replace(/\d+s$/, Math.round((Date.now() - started) / 1000) + "s"); }, 1000);
+  const secs = () => { wait.querySelector(".elapsed").textContent = Math.round((Date.now() - started) / 1000) + "s"; };
+  const tick = () => { wait.querySelector(".said").textContent = WAITING[Math.min(i++, WAITING.length - 1)]; secs(); };
+  tick(); const timer = setInterval(tick, 12000); const clock = setInterval(secs, 1000);
   wait.scrollIntoView({ behavior: "smooth", block: "end" });
 
   try {
@@ -348,6 +420,7 @@ function renderGuide(data) {
   const routes = (data.tool_calls || []).filter(c => c.name === "plan_route");
   if (routes.length) { try { route = JSON.parse(routes[routes.length - 1].result); } catch (e) {} }
   const cards = route ? buildCards(body, route) : [];
+  foldNotes(body);
   if (cards.length) {
     body.querySelector(".card").before(tourBar(route, cards));
   } else if (Speech.ok && (data.response || "").length > 120) {
@@ -394,24 +467,35 @@ function buildCards(body, route) {
   return cards;
 }
 
+const ICON = {
+  pin: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-6.5-6.1-6.5-11.1a6.5 6.5 0 0 1 13 0C18.5 14.9 12 21 12 21z"/><circle cx="12" cy="9.9" r="2.3"/></svg>',
+  eye: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
+  check: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12.5l5 5L20 6.5"/></svg>',
+};
+
 function makeCard(n, rawTitle, gallery, stop, section) {
   const card = el("section", "card" + (stop.extra || /^E/.test(n) ? " extra" : ""));
+  card.id = "stop-" + n;
   // Titles in two scripts come as "原文|English": show the English, keep the original underneath
   const [orig, english] = rawTitle.includes("|") ? rawTitle.split("|", 2) : ["", rawTitle];
   card.dataset.title = english.trim();
+  card.dataset.n = n;
+  card.dataset.gallery = stop.gallery || gallery;
+  if (stop.arrive_after_minutes !== undefined) card.dataset.minute = Math.round(stop.arrive_after_minutes);
 
   const photo = el("a", "photo" + (stop.image_small_url ? "" : " none"));
   if (stop.met_url) { photo.href = stop.met_url; photo.target = "_blank"; photo.rel = "noopener"; photo.title = "Open The Met's page for this object"; }
-  const num = el("span", "num"); num.textContent = n;
   if (stop.image_small_url) {
     const img = el("img"); img.src = stop.image_small_url; img.alt = english.trim(); img.loading = "lazy";
-    photo.append(img, num);
+    photo.append(img);
   } else {
-    photo.append(num, document.createTextNode("No open-access image of this object. The Met shares pictures only of public-domain works."));
+    photo.append(document.createTextNode("No open-access image of this object. The Met shares pictures only of public-domain works."));
   }
 
   const content = el("div", "content");
-  const h = el("h3"); h.textContent = english.trim(); content.appendChild(h);
+  const no = el("span", "stopno");
+  no.textContent = /^E/.test(n) ? `Extra ${String(n).replace(/^E/, "")}` : `Stop ${n}`;
+  const h = el("h3"); h.textContent = english.trim(); content.append(no, h);
   if (orig.trim()) { const o = el("div", "orig"); o.textContent = orig.trim(); content.appendChild(o); }
 
   // The first paragraph starts with "*maker, date* · about N min in", then a line break, then the story
@@ -424,56 +508,115 @@ function makeCard(n, rawTitle, gallery, stop, section) {
     content.appendChild(meta);
   }
 
-  const walk = el("div", "walk");
-  const bits = [`Gallery ${stop.gallery || gallery}`];
-  if (stop.floor) bits.push(`floor ${stop.floor}`);
-  if (stop.arrive_after_minutes !== undefined) bits.push(`${Math.round(stop.arrive_after_minutes)} min in`);
-  if (stop.walk_minutes_before) bits.push(`${Math.round(stop.walk_minutes_before)} min walk from the last stop`);
-  walk.appendChild(document.createTextNode(bits.join(" · ")));
-  const tag = (cls, text) => { const g = el("span", "tag " + cls); g.textContent = text; walk.appendChild(g); };
-  if (stop.optional) tag("opt", "if time allows");
-  if (stop.live_check === "on_view") tag("live", "on view, checked live");
-  if (stop.moved_from) tag("moved", `moved from ${stop.moved_from}`);
-  content.appendChild(walk);
+  // Where to go: the gallery first and large, then floor and walk
+  const way = el("div", "wayfind");
+  const gal = el("span", "gal"); gal.innerHTML = ICON.pin;
+  gal.appendChild(document.createTextNode(`Gallery ${stop.gallery || gallery}`));
+  way.appendChild(gal);
+  const bits = [];
+  if (stop.floor) bits.push(`Floor ${stop.floor}`);
+  if (stop.walk_minutes_before) bits.push(`${Math.round(stop.walk_minutes_before)} min walk`);
+  if (stop.arrive_after_minutes !== undefined) bits.push(`${Math.round(stop.arrive_after_minutes)} min into the tour`);
+  if (bits.length) { const d = el("span", "way-bits"); d.textContent = bits.join(" · "); way.appendChild(d); }
+  const flags = el("span", "way-flags");
+  if (stop.live_check === "on_view") {
+    const f = el("span", "flag live"); f.innerHTML = ICON.check; f.title = "Checked against the Met's live data just now";
+    f.appendChild(document.createTextNode("On view")); flags.appendChild(f);
+  }
+  if (stop.moved_from) { const f = el("span", "flag moved"); f.textContent = `Moved from ${stop.moved_from}`; flags.appendChild(f); }
+  if (stop.optional) { const f = el("span", "flag opt"); f.textContent = "If time allows"; flags.appendChild(f); }
+  if (flags.childNodes.length) way.appendChild(flags);
+  content.appendChild(way);
 
+  if (Speech.ok) {
+    const actions = el("div", "actions");
+    actions.appendChild(listenButton(() => [cardSpeech(card, n)], card, "Listen to this stop", "stop-listen"));
+    content.appendChild(actions);
+  }
+
+  // What to notice first, then the story
+  const story = el("div", "story");
+  let look = null;
   section.forEach(nd => {
     if (nd.nodeName === "P" && /^\s*look for:/i.test(nd.textContent)) {
       nd.classList.add("lookfor");
-      // Bold the label: replace the leading "Look for:" text with <b>Look for</b>
       const t = nd.firstChild;
       if (t && t.nodeType === 3) {
-        // "Look for: Look for the..." / "Look for: Notice the..." -> "Look for the..."
+        // "Look for: Look for the..." / "Look for: Notice the..." -> "The..."
         let rest = t.textContent.replace(/^\s*look for:\s*/i, "").replace(/^(look for|notice|see)\s+/i, "");
-        t.textContent = " " + rest;
-        nd.prepend(Object.assign(el("b"), { textContent: "Look for" }));
+        t.textContent = rest.charAt(0).toUpperCase() + rest.slice(1);
+        const label = el("b"); label.innerHTML = ICON.eye; label.appendChild(document.createTextNode("Look for"));
+        nd.prepend(label);
       }
+      look = nd;
+      return;
     }
     if (!nd.textContent.trim()) return;  // whitespace, or the paragraph the meta line came from
-    content.appendChild(nd);
+    story.appendChild(nd);
   });
-
-  const actions = el("div", "actions");
-  if (Speech.ok) actions.appendChild(listenButton(() => [cardSpeech(card, n)], card, "Listen"));
-  content.appendChild(actions);
+  if (look) content.appendChild(look);
+  if (story.childNodes.length) {
+    const wrap = el("div", "story-wrap");
+    const head = el("div", "story-head"); head.textContent = "The story";
+    wrap.append(head, story);
+    content.appendChild(wrap);
+  }
   card.append(photo, content);
   return card;
 }
 
+// The whole walk at a glance: every stop, its gallery and when you reach it; tap one to jump there
 function tourBar(route, cards) {
-  const bar = el("div", "tour-bar");
-  const sum = el("span", "sum");
-  const main = cards.filter(c => !c.classList.contains("extra")), extra = cards.length - main.length;
-  sum.textContent = `${main.length} stops · about ${route.total_minutes} min` +
-    (extra ? ` · ${extra} extra${extra > 1 ? "s" : ""} after that (about ${route.total_with_extras_minutes} min in all)` : "");
-  bar.appendChild(sum);
-  if (Speech.ok) bar.appendChild(listenButton(() => main.map((c, i) => ({ text: cardSpeech(c, i + 1), card: c })),
+  const nav = el("nav", "overview");
+  nav.setAttribute("aria-label", "Stops on this tour");
+  const top = el("div", "ov-top");
+  const sum = el("div", "ov-sum");
+  const main = cards.filter(c => !c.classList.contains("extra")), extras = cards.filter(c => c.classList.contains("extra"));
+  sum.innerHTML = `<span class="ov-label">Your tour</span>`;
+  sum.appendChild(document.createTextNode(`${main.length} stops · about ${route.total_minutes} min` +
+    (extras.length ? ` · ${extras.length} extra${extras.length > 1 ? "s" : ""} if you have time` : "")));
+  top.appendChild(sum);
+  if (Speech.ok) top.appendChild(listenButton(() => main.map((c, i) => ({ text: cardSpeech(c, i + 1), card: c })),
                                               null, "Play the whole tour", "primary"));
-  return bar;
+  nav.appendChild(top);
+  const list = el("ol", "ov-list");
+  cards.forEach((c, i) => {
+    if (c.classList.contains("extra") && !(cards[i - 1] || {classList: {contains: () => true}}).classList.contains("extra")) {
+      const sep = el("li", "ov-sep"); sep.textContent = "If you have time"; list.appendChild(sep);
+    }
+    const li = el("li", c.classList.contains("extra") ? "extra" : "");
+    const a = el("a"); a.href = "#" + c.id;
+    a.addEventListener("click", e => { e.preventDefault(); c.scrollIntoView({ behavior: "smooth", block: "start" }); });
+    const num = el("span", "ov-n"); num.textContent = /^E/.test(c.dataset.n) ? "+" : c.dataset.n;
+    const t = el("span", "ov-t"); t.textContent = c.dataset.title;
+    const g = el("span", "ov-g"); g.textContent = `Gallery ${c.dataset.gallery}`;
+    a.append(num, t, g);
+    li.appendChild(a);
+    list.appendChild(li);
+  });
+  nav.appendChild(list);
+  return nav;
 }
 
 function cardSpeech(card, n) {
   const label = card.classList.contains("extra") ? `Extra stop, number ${String(n).replace(/^E/, "")}` : `Stop ${n}`;
-  return `${label}. ${card.dataset.title}. ` + speakable(card.querySelector(".content"), ".meta, .walk, .actions, h3, .orig");
+  const story = card.querySelector(".story"), look = card.querySelector(".lookfor");
+  return `${label}. ${card.dataset.title}. ` + (story ? speakable(story) : "") + (look ? " " + speakable(look) : "");
+}
+
+// "Before you go" folds into one line that opens on tap
+function foldNotes(body) {
+  const h = [...body.querySelectorAll("h2, h3")].find(x => /before you go/i.test(x.textContent));
+  if (!h) return;
+  const d = el("details", "notes");
+  const parts = [];
+  for (let n = h.nextSibling; n && !/^(H1|H2|H3)$/.test(n.nodeName); n = n.nextSibling) parts.push(n);
+  const count = parts.reduce((k, n) => k + (n.querySelectorAll ? n.querySelectorAll("li").length : 0), 0);
+  const s = el("summary"); s.innerHTML = `<span class="ov-label">Before you go</span>`;
+  s.appendChild(document.createTextNode(count ? `${count} note${count > 1 ? "s" : ""} on the route and the data` : "Notes on the route and the data"));
+  d.appendChild(s);
+  parts.forEach(n => d.appendChild(n));
+  h.replaceWith(d);
 }
 
 // Readable text of a node: no citation chips, buttons or (optionally) other parts

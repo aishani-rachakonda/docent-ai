@@ -140,7 +140,23 @@ def get_object(object_id: int) -> dict:
     if not rows:
         return {"error": f"Object {object_id} is not in the on-view snapshot."}
     row = rows[0]
-    return {k: (str(v) if k.endswith(("_at", "_date")) and v is not None else v) for k, v in row.items()}
+    out = {k: (str(v) if k.endswith(("_at", "_date")) and v is not None else v) for k, v in row.items()}
+    if not out.get("object_date"):  # some records leave the date text blank but keep the years
+        out["object_date"] = _years(out.get("begin_year"), out.get("end_year"))
+    return out
+
+
+def _years(begin, end) -> str | None:
+    """A date from the record's year fields: 1587 and 1588 -> '1587–88'; -332 and -30 -> '332–30 BCE'."""
+    if begin is None:
+        return None
+    end = begin if end is None else end
+    if begin < 0:
+        return f"{-begin} BCE" if begin == end else f"{-begin}–{-end} BCE" if end < 0 else f"{-begin} BCE–{end} CE"
+    if begin == end:
+        return str(begin)
+    same_century = len(str(begin)) == len(str(end)) == 4 and str(begin)[:2] == str(end)[:2]
+    return f"{begin}–{str(end)[2:] if same_century else end}"
 
 
 def _has_wiki() -> bool:
