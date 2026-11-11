@@ -1,0 +1,5 @@
+# Files left out of the Cloud Run upload: the same as .gitignore (the raw 340 MB CSV, .venv, .env)
+.gcloudignore
+.git
+.gitignore
+#!include:.gitignore
