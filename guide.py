@@ -39,6 +39,7 @@ RESEARCH_SETTINGS = ModelSettings(extra_args={**_extra, "reasoning_effort": os.e
 
 MAX_RESEARCHERS = 5
 LEAD_MAX_TURNS = 20
+MAX_RESEARCH_ROUNDS = 2  # the first search, and one more if it leaves a gap
 RESEARCHER_MAX_TURNS = 8
 MET_API = "https://collectionapi.metmuseum.org/public/collection/v1/objects/{}"
 
@@ -51,6 +52,9 @@ class Run:
         self.tool_calls: list[dict] = []
         self.researchers = 0
         self.storytellers = 0
+        self.research_rounds = 0
+        self.found: dict[str, dict] = {}   # interest -> {"direct": n, "related": n}, over all rounds
+        self.needs_more: dict | None = None  # set when the latest findings leave a gap
 
 
 class LogHooks(RunHooks):
@@ -189,7 +193,7 @@ def search_wikipedia(query: str) -> str:
 
 
 @function_tool
-async def plan_route(object_ids: list[int], extra_ids: list[int] | None = None, start_gallery: str = "",
+async def plan_route(ctx: RunContextWrapper[Run], object_ids: list[int], extra_ids: list[int] | None = None, start_gallery: str = "",
                      minutes_per_stop: float = 6, budget_minutes: float | None = None) -> str:
     """Order the main stops into a walk through the building and estimate the time; the extras
     continue the same walk after the last main stop, for a visitor with time left. Also checks every
@@ -203,6 +207,10 @@ async def plan_route(object_ids: list[int], extra_ids: list[int] | None = None, 
         minutes_per_stop: Time to spend at each object.
         budget_minutes: The visitor's total time, if they gave one.
     """
+    run = ctx.context
+    if run.needs_more:  # the coverage check found a gap and a research round is left: go back first
+        return _dump({"error": "The research left gaps. Call research again before planning the route.",
+                      **run.needs_more})
     extra_ids = [i for i in dict.fromkeys(extra_ids or []) if i not in set(object_ids)]
     stops, missing = [], []
     for oid in list(dict.fromkeys(object_ids)) + extra_ids:
@@ -266,8 +274,8 @@ researcher = Agent(
     name="Researcher",
     instructions="""\
 You search one slice of The Met's on-view collection for a museum tour. Your task names the
-visitor's theme, the slice to search (a department, culture, period or idea), and how many
-candidates to return.
+visitor's theme and interests, the slice to search (a department, culture, period or idea), and how
+many candidates to return.
 
 Budget: at most 6 tool calls, then reply. A short list of good candidates beats a long search.
 
@@ -283,11 +291,15 @@ Budget: at most 6 tool calls, then reply. A short list of good candidates beats 
    one or two short facts that make the stop interesting.
 4. Reply with JSON only, no prose:
    {"slice": "...", "candidates": [{"object_id": 123, "title": "...", "gallery": "...",
+     "interest": "the visitor's interest it serves, copied exactly from the list",
+     "match": "direct" if the record shows the object is or depicts that interest (a cat for 'cats'),
+              "related" if the link is looser (a sea monster for 'dinosaurs', a star globe for 'rockets'),
      "why_it_fits": "one sentence tying it to the theme, from the record",
      "evidence": [{"fact": "...", "source": "met:123" or "wikipedia:Article Title"}]}],
     "gaps": "what you looked for and could not find, or empty"}
 Every fact must come from a tool result, with its source. Never invent objects, IDs or galleries.
-If the slice has nothing that fits, return an empty candidates list and say so in gaps.""",
+If the slice has nothing that fits, return an empty candidates list and say so in gaps. Be honest
+about match: a related object labelled direct hides a gap the visitor should be told about.""",
     model=RESEARCH_MODEL,
     model_settings=RESEARCH_SETTINGS,
     tools=[search_objects, get_object, gallery_summary, run_sql, get_wikipedia],
@@ -306,22 +318,28 @@ async def _wrap_up(data) -> str:
 
 
 @function_tool
-async def research(ctx: RunContextWrapper[Run], theme: str, slices: list[str], candidates_per_slice: int = 4) -> str:
+async def research(ctx: RunContextWrapper[Run], theme: str, interests: list[str], slices: list[str],
+                   candidates_per_slice: int = 4) -> str:
     """Send Researchers out in parallel, one per slice of the museum, each in a fresh context.
-    Waits for all of them and returns their candidates and gaps.
+    Waits for all of them and returns their candidates, plus a coverage check done in code: which
+    interests were found, which slices came back empty, and whether to search again.
 
     Args:
-        theme: The visitor's interests and constraints, in one or two sentences.
+        theme: The visitor's request and constraints, in one or two sentences.
+        interests: The visitor's distinct interests, in a word or two each, e.g. ['cats', 'horses'].
         slices: 2 to 5 slices to search, e.g. ['Egyptian Art: cats and lions', 'Asian Art: tigers and cranes'].
         candidates_per_slice: How many candidates each Researcher returns.
     """
     run = ctx.context
     slices = slices[:MAX_RESEARCHERS]
+    interests = [i.strip() for i in interests if i.strip()] or [theme]
+    run.research_rounds += 1
 
     async def one(slice_: str):
         run.researchers += 1
         agent = researcher.clone(name=f"Researcher {run.researchers}")
-        prompt = f"Theme: {theme}\nYour slice: {slice_}\nReturn up to {candidates_per_slice} candidates."
+        prompt = (f"Theme: {theme}\nVisitor's interests: {_dump(interests)}\nYour slice: {slice_}\n"
+                  f"Return up to {candidates_per_slice} candidates.")
         try:
             result = await Runner.run(agent, prompt, context=run, hooks=HOOKS, max_turns=RESEARCHER_MAX_TURNS,
                                       error_handlers={"max_turns": _wrap_up})
@@ -332,7 +350,53 @@ async def research(ctx: RunContextWrapper[Run], theme: str, slices: list[str], c
         except Exception as e:  # one Researcher failing must not sink the tour
             return {"slice": slice_, "agent": agent.name, "error": f"{type(e).__name__}: {str(e)[:200]}"}
 
-    return _dump(await asyncio.gather(*(one(s) for s in slices)))
+    findings = await asyncio.gather(*(one(s) for s in slices))
+    coverage = _coverage(run, interests, findings)
+    return _dump({"round": run.research_rounds, "findings": findings, "coverage": coverage})
+
+
+def _coverage(run: Run, interests: list[str], findings: list[dict]) -> dict:
+    """Did the findings cover the request? Counted in code, so the decision to search again does
+    not rest on the Lead noticing a gap."""
+    for i in interests:
+        run.found.setdefault(i, {"direct": 0, "related": 0})
+    failed, empty, total = [], [], 0
+    for f in findings:
+        if "error" in f:
+            failed.append(f["slice"])
+            continue
+        cands = _parse_story(f.get("findings", "")).get("candidates") or []
+        if not cands:
+            empty.append(f["slice"])
+        total += len(cands)
+        for c in cands:
+            key = next((i for i in run.found if i.lower() == str(c.get("interest", "")).strip().lower()), None)
+            if key is None:  # an interest not named exactly: count it toward the slice's best guess
+                key = next((i for i in run.found if i.lower() in (f["slice"] + " " + str(c.get("interest", ""))).lower()), None)
+            if key:
+                run.found[key]["related" if c.get("match") == "related" else "direct"] += 1
+    unmet = [i for i, n in run.found.items() if n["direct"] == 0]
+    gaps = []
+    if unmet:
+        gaps.append(f"nothing that directly matches: {', '.join(unmet)}")
+    if failed:
+        gaps.append(f"slices that failed: {'; '.join(failed)}")
+    if empty:
+        gaps.append(f"slices that came back empty: {'; '.join(empty)}")
+    if total < 8:
+        gaps.append(f"only {total} candidates in all (a tour needs about 8 to 10, with extras)")
+    can_retry = run.research_rounds < MAX_RESEARCH_ROUNDS
+    run.needs_more = {"gaps": gaps, "unmet": unmet} if gaps and can_retry else None
+    if not gaps:
+        next_step = "Coverage is good: choose the stops."
+    elif can_retry:
+        next_step = ("Search again before planning the route: call research with new slices aimed at these gaps "
+                     "(synonyms, other departments, related subjects).")
+    else:
+        next_step = ("No more research rounds. Plan the tour from what was found; the tour will tell the visitor "
+                     "what the Met does not have.")
+    return {"found_by_interest": run.found, "unmet_interests": unmet, "gaps": gaps,
+            "rounds_used": run.research_rounds, "rounds_allowed": MAX_RESEARCH_ROUNDS, "next_step": next_step}
 
 
 # --- Storyteller ---
@@ -525,7 +589,8 @@ Rules:
 
 def _fix_tags(text: str) -> str:
     """A bare object number in brackets, [544118], is a Met citation: write it as [met:544118]."""
-    return re.sub(r"\[(\d{3,})\]", r"[met:\1]", text)
+    return re.sub(r"\[(\d{3,}(?:\s*,\s*\d{3,})*)\]",
+                  lambda m: "".join(f"[met:{n.strip()}]" for n in m.group(1).split(",")), text)
 
 
 async def _write(run: Run, prompt: str) -> str:
@@ -569,8 +634,22 @@ async def write_tour(ctx: RunContextWrapper[Run], request: str, route_json: str,
     by_id = {s["object_id"]: s for s in stories}
     if not isinstance(route_data, dict):
         route_data = {}
+    unmet = [i for i, n in run.found.items() if n["direct"] == 0]
+    missing = ("" if not unmet else
+               f"\n\nThe Met has nothing on view that directly matches: {', '.join(unmet)}. The introduction's first "
+               "sentence must say so plainly, and that this tour uses the closest things the collection has. "
+               "Cite it with [data].")
+    as_of = met_tools.snapshot_info().get("data_as_of", "")
+    missing += f"\n\nThe on-view data is as of {as_of}: use this date if you mention one, never another."
     frame = await _write(run, f"Write the tour's frame.\n\nVisitor request: {request}\n\nRoute (in walking order):\n"
-                              f"{route_json}\n\nStories, one per stop:\n{_dump(stories)}")
+                              f"{route_json}\n\nStories, one per stop:\n{_dump(stories)}{missing}")
+    said = [i for i in unmet if re.search(re.escape(i.rstrip("s")), frame, re.I)]
+    if len(said) < len(unmet):  # the Writer did not say it: say it in code
+        lacking = ", ".join(i for i in unmet if i not in said)
+        note = (f"The Met has nothing on view that directly matches {lacking} (in its data as of {as_of}), so this "
+                f"tour uses the closest things in the collection. [data]")
+        frame = re.sub(r"^(##[^\n]*\n)", lambda m: m.group(1) + "\n" + note + "\n", frame, count=1) \
+            if frame.lstrip().startswith("##") else note + "\n\n" + frame
     body = _assemble(route_data, by_id, evidence_json)
     if STOPS_MARK in frame:
         return frame.replace(STOPS_MARK, body)
@@ -641,14 +720,16 @@ Decide what the visitor needs:
 A. A tour ("I have two hours and love Japan"):
    - If the request is too vague to plan (no interests at all, e.g. "show me cool stuff"), ask one
      short question about their interests and time, and stop.
-   - Otherwise call research once with 2 to 5 slices that cover the theme across different
-     departments. Then pick from the candidates: main stops, about one per 10 minutes of the
+   - Otherwise your first tool call is research (no searching of your own first), with the visitor's interests (each in a word or two) and 2 to 5
+     slices that cover them across different departments. Then pick from the candidates: main stops, about one per 10 minutes of the
      visitor's time (6 for an hour; 8 if they gave no time), varied, on theme, the strongest ones,
      not crowded into one gallery; and 4 to 6 extras, good stops for a visitor with time to spare
      (the route keeps the ones that continue the walk).
    - Use the Researchers' candidates as they are: do not search the collection yourself during
-     a tour. If the findings leave a gap (a slice came back empty or failed, or fewer than 6 good
-     stops), call research again with new slices. At most 3 research calls in total.
+     a tour. Read research's coverage check: if its next_step says to search again, call research
+     once more with new slices aimed at the gaps (synonyms, other departments, related subjects),
+     keeping the same interests. Plan from everything both rounds found. If an interest is still
+     unmet after that, use the closest related objects; the tour will tell the visitor.
    - Call plan_route with the main stops as object_ids, the extras as extra_ids, the visitor's
      start gallery and time budget.
    - Call write_tour with the request, plan_route's JSON, and the evidence for the chosen stops.
