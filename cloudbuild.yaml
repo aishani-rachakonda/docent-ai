@@ -1,0 +1,10 @@
+# Continuous deploy: a Cloud Build trigger on pushes to main runs this, which redeploys the
+# docent-ai Cloud Run service from source (Google Cloud buildpacks, Procfile). Flags not given here
+# (public access, timeout, CPU, memory, instances, environment variables) keep their current values.
+steps:
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: gcloud
+    args: ["run", "deploy", "docent-ai", "--source=.", "--region=us-east1", "--quiet"]
+timeout: 1800s
+options:
+  logging: CLOUD_LOGGING_ONLY
