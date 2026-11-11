@@ -91,7 +91,7 @@ body.started header { padding-top: 20px; }
 .card .content { padding: 14px 16px 16px; }
 .card.extra { border-style: dashed; background: transparent; }
 .card.extra .photo img { max-height: 280px; }
-.card.extra .num { background: var(--surface); color: var(--accent); border: 1.5px solid var(--accent); width: auto; min-width: 30px; padding: 0 6px; border-radius: 999px; }
+.card.extra .num { background: var(--surface); color: var(--accent); border: 1.5px solid var(--accent); }
 .msg.guide h2.extras-head { margin: 28px 0 2px; font-size: 22px; }
 .extras-head + .more { margin-top: 0; }
 .msg.guide .card h3 { margin: 0; font-size: 21px; }
@@ -388,7 +388,7 @@ function buildCards(body, route) {
     if (!head) { head = el("h2"); head.textContent = "Extras, if you have time"; extras[0].before(head); }
     head.classList.add("extras-head");
     const note = el("p", "more");
-    note.textContent = "Short detours from the main route, each listed with the stop it's closest to.";
+    note.textContent = "The walk continues from the last stop, so you can keep going for as long as you like.";
     head.after(note);
   }
   return cards;
@@ -427,13 +427,8 @@ function makeCard(n, rawTitle, gallery, stop, section) {
   const walk = el("div", "walk");
   const bits = [`Gallery ${stop.gallery || gallery}`];
   if (stop.floor) bits.push(`floor ${stop.floor}`);
-  if (stop.extra) {
-    if (stop.near_stop) bits.push(`near stop ${stop.near_stop}`);
-    if (stop.extra_minutes) bits.push(`adds about ${stop.extra_minutes} min`);
-  } else {
-    if (stop.arrive_after_minutes !== undefined) bits.push(`${Math.round(stop.arrive_after_minutes)} min in`);
-    if (stop.walk_minutes_before) bits.push(`${Math.round(stop.walk_minutes_before)} min walk from the last stop`);
-  }
+  if (stop.arrive_after_minutes !== undefined) bits.push(`${Math.round(stop.arrive_after_minutes)} min in`);
+  if (stop.walk_minutes_before) bits.push(`${Math.round(stop.walk_minutes_before)} min walk from the last stop`);
   walk.appendChild(document.createTextNode(bits.join(" · ")));
   const tag = (cls, text) => { const g = el("span", "tag " + cls); g.textContent = text; walk.appendChild(g); };
   if (stop.optional) tag("opt", "if time allows");
@@ -468,7 +463,8 @@ function tourBar(route, cards) {
   const bar = el("div", "tour-bar");
   const sum = el("span", "sum");
   const main = cards.filter(c => !c.classList.contains("extra")), extra = cards.length - main.length;
-  sum.textContent = `${main.length} stops · about ${route.total_minutes} min` + (extra ? ` · ${extra} extra${extra > 1 ? "s" : ""} if you have time` : "");
+  sum.textContent = `${main.length} stops · about ${route.total_minutes} min` +
+    (extra ? ` · ${extra} extra${extra > 1 ? "s" : ""} after that (about ${route.total_with_extras_minutes} min in all)` : "");
   bar.appendChild(sum);
   if (Speech.ok) bar.appendChild(listenButton(() => main.map((c, i) => ({ text: cardSpeech(c, i + 1), card: c })),
                                               null, "Play the whole tour", "primary"));
@@ -476,7 +472,7 @@ function tourBar(route, cards) {
 }
 
 function cardSpeech(card, n) {
-  const label = /^E/.test(String(n)) ? `Extra stop ${String(n).slice(1)}` : `Stop ${n}`;
+  const label = card.classList.contains("extra") ? `Extra stop, number ${String(n).replace(/^E/, "")}` : `Stop ${n}`;
   return `${label}. ${card.dataset.title}. ` + speakable(card.querySelector(".content"), ".meta, .walk, .actions, h3, .orig");
 }
 

@@ -190,13 +190,14 @@ def search_wikipedia(query: str) -> str:
 @function_tool
 async def plan_route(object_ids: list[int], extra_ids: list[int] | None = None, start_gallery: str = "",
                      minutes_per_stop: float = 6, budget_minutes: float | None = None) -> str:
-    """Order the main stops into a walk through the building and estimate the time, and attach each
-    extra to the main stop it is nearest, as an optional detour. Also checks every object against
-    the Met's live API, and drops any that are no longer on view.
+    """Order the main stops into a walk through the building and estimate the time; the extras
+    continue the same walk after the last main stop, for a visitor with time left. Also checks every
+    object against the Met's live API, and drops any that are no longer on view.
 
     Args:
         object_ids: The main stops, in any order: about one per 10 minutes of the visitor's time.
-        extra_ids: 2 to 4 more good stops for a visitor who has time left, in any order.
+        extra_ids: 4 to 6 more good stops for a visitor with time left, in any order. The route
+            keeps up to 3 that continue the walk without doubling back.
         start_gallery: Where the visitor is now (a gallery number); empty means the main entrance.
         minutes_per_stop: Time to spend at each object.
         budget_minutes: The visitor's total time, if they gave one.
@@ -456,10 +457,8 @@ it, join it to the tour's thread in a few words, or drop a sentence; never add f
 from the Researcher's evidence. End each sentence that states a fact with its source tag:
 [met:<object_id>] or [wikipedia:<Article Title>].
 After the main stops, if the route has extras: a heading "## Extras, if you have time", then each
-extra, in the given order, as:
-### E<n>. <Title> — Gallery <number>
-*<artist or culture>, <date>* · near stop <near_stop>, about <extra_minutes> extra min
-followed by its story and "Look for" line, as for a main stop.
+extra in the given order, numbered on from the main stops (after stop 6 comes 7), in the same
+format as a main stop: they continue the same walk.
 Then a short "Before you go" list with the route notes you were given (approximate walking times,
 removed stops, optional stops), and anything the data could not tell you.
 
@@ -549,7 +548,8 @@ A. A tour ("I have two hours and love Japan"):
    - Otherwise call research once with 2 to 5 slices that cover the theme across different
      departments. Then pick from the candidates: main stops, about one per 10 minutes of the
      visitor's time (6 for an hour; 8 if they gave no time), varied, on theme, the strongest ones,
-     not crowded into one gallery; and 2 to 4 extras, good stops for a visitor with time to spare.
+     not crowded into one gallery; and 4 to 6 extras, good stops for a visitor with time to spare
+     (the route keeps the ones that continue the walk).
    - Use the Researchers' candidates as they are: do not search the collection yourself during
      a tour. If the findings leave a gap (a slice came back empty or failed, or fewer than 6 good
      stops), call research again with new slices. At most 3 research calls in total.

@@ -86,41 +86,94 @@ def order_galleries(galleries: list[str], start: str = ENTRANCE) -> list[str]:
 def plan(stops: list[dict], start_gallery: str = "", minutes_per_stop: float = 6, budget_minutes: float | None = None,
          extras: list[dict] | None = None) -> dict:
     """Order the main stops ({object_id, gallery, ...}) into a walk and estimate its time, then
-    attach each extra to the main stop it is closest to, as an optional detour.
+    continue the same walk through the extras, so a visitor with time left keeps going forward
+    instead of doubling back.
 
     Stops in the same gallery are kept together. If there are no extras and the walk runs over the
-    budget, the last stops become extras rather than being silently dropped.
+    budget, the stops past the budget become the extras, in the same order.
     """
     start = start_gallery.strip() or ENTRANCE
     extras = list(extras or [])
     main = [s for s in stops if not is_cloisters(s["gallery"])]
     cloisters = [s for s in stops + extras if is_cloisters(s["gallery"])]
     extras = [s for s in extras if not is_cloisters(s["gallery"])]
-    route, minutes = _walk(main, start, minutes_per_stop)
+    route, minutes = _walk(main, start, minutes_per_stop, order=_order_ending_near(main, extras, start))
 
     notes = ["Walking times come from an approximate model of the building (gallery numbers grouped "
              "into wings and floors), not from a real floor plan."]
+    extra_stops: list[dict] = []
     if budget_minutes is not None and minutes > budget_minutes and not extras and len(route) > 1:
-        # Keep the stops that fit; the rest become extras along the way
-        keep = [r for r in route if r["arrive_after_minutes"] + minutes_per_stop <= budget_minutes] or route[:1]
-        cut = {r["object_id"] for r in keep}
-        extras = [s for s in main if s["object_id"] not in cut]
-        route, minutes = _walk([s for s in main if s["object_id"] in cut], start, minutes_per_stop)
-        notes.append(f"Only {len(route)} stops fit in {budget_minutes:.0f} min; the rest are listed as extras.")
-    elif budget_minutes is not None and minutes > budget_minutes:
-        notes.append(f"The main route takes about {minutes:.0f} min, over the {budget_minutes:.0f} min you have.")
-
-    extra_stops = _attach(extras, route, start, minutes_per_stop)
+        fit = [r for r in route if r["arrive_after_minutes"] + minutes_per_stop <= budget_minutes] or route[:1]
+        extra_stops = [{**r, "extra": True} for r in route[len(fit):]]
+        route = fit
+        minutes = route[-1]["arrive_after_minutes"] + minutes_per_stop
+        notes.append(f"{len(route)} stops fit in {budget_minutes:.0f} min; the rest continue the walk as extras.")
+    else:
+        if budget_minutes is not None and minutes > budget_minutes:
+            notes.append(f"The main route takes about {minutes:.0f} min, over the {budget_minutes:.0f} min you have.")
+        if extras:
+            here = route[-1]["gallery"] if route else start
+            chosen, left_out = _onward(extras, here)
+            more, _ = _walk(chosen, here, minutes_per_stop, offset=minutes, order=list(dict.fromkeys(s["gallery"] for s in chosen)))
+            extra_stops = [{**r, "extra": True} for r in more]
+            if left_out:
+                notes.append("Extras left out because they would mean doubling back: "
+                             + "; ".join(f"{s.get('title', '')} ({s['object_id']}, gallery {s['gallery']})" for s in left_out))
     if cloisters:
         notes.append(f"{len(cloisters)} stop(s) are at The Met Cloisters, a separate building in Fort Tryon "
                      "Park; they are listed apart and not included in the walk.")
     return {"start": start, "total_minutes": round(minutes), "stops": route, "extras": extra_stops,
+            "total_with_extras_minutes": round(extra_stops[-1]["arrive_after_minutes"] + minutes_per_stop)
+            if extra_stops else round(minutes),
             "cloisters_stops": cloisters, "notes": notes}
 
 
-def _walk(stops: list[dict], start: str, minutes_per_stop: float) -> tuple[list[dict], float]:
-    order = order_galleries([s["gallery"] for s in stops], start)
-    route, minutes, here = [], 0.0, start
+MAX_EXTRAS = 3
+ONWARD = 6  # the most walking cost between extras: same floor; another floor means doubling back
+
+
+def _onward(extras: list[dict], here: str) -> tuple[list[dict], list[dict]]:
+    """Keep the extras that continue the walk from `here`: each time, the nearest one left, as long
+    as it is on the way (same floor or closer). At most MAX_EXTRAS galleries."""
+    left = list(extras)
+    chosen: list[dict] = []
+    galleries: list[str] = []
+    while left and len(galleries) < MAX_EXTRAS:
+        g = min(dict.fromkeys(s["gallery"] for s in left), key=lambda x: (walk_cost(here, x), x))
+        if walk_cost(here, g) > ONWARD:
+            break
+        chosen += [s for s in left if s["gallery"] == g]
+        left = [s for s in left if s["gallery"] != g]
+        galleries.append(g)
+        here = g
+    return chosen, left
+
+
+def _order_ending_near(main: list[dict], extras: list[dict], start: str) -> list[str] | None:
+    """The order of the main galleries that makes the whole walk shortest when the extras come
+    after them: the main route then ends close to the extras, so nobody has to double back.
+    Exact for up to 7 main galleries; beyond that, the plain shortest order is used."""
+    gm = list(dict.fromkeys(s["gallery"] for s in main))
+    ge = [g for g in dict.fromkeys(s["gallery"] for s in extras) if g not in gm] or list(dict.fromkeys(s["gallery"] for s in extras))
+    if not ge or not gm or len(gm) > 7:
+        return None
+    best = None
+    for perm in itertools.permutations(gm):
+        cost = _path_cost(list(perm), start)
+        if best is not None and cost >= best[0]:
+            continue
+        cost += _path_cost(order_galleries(ge, perm[-1]), perm[-1])
+        if best is None or cost < best[0]:
+            best = (cost, list(perm))
+    return best[1]
+
+
+def _walk(stops: list[dict], start: str, minutes_per_stop: float, offset: float = 0.0,
+          order: list[str] | None = None) -> tuple[list[dict], float]:
+    """Visit the stops in the shortest gallery order from `start` (or the order given); times
+    count on from `offset`."""
+    order = order or order_galleries([s["gallery"] for s in stops], start)
+    route, minutes, here = [], offset, start
     for g in order:
         walk = walk_cost(here, g) * MINUTES_PER_COST
         for k, s in enumerate(x for x in stops if x["gallery"] == g):
@@ -134,25 +187,3 @@ def _walk(stops: list[dict], start: str, minutes_per_stop: float) -> tuple[list[
 def _place(gallery: str) -> dict:
     key = gallery_key(gallery)
     return {"floor": FLOOR_OF_BLOCK.get(key[0]) if key else None, "wing": WING_OF_BLOCK.get(key[0]) if key else None}
-
-
-def _attach(extras: list[dict], route: list[dict], start: str, minutes_per_stop: float) -> list[dict]:
-    """Each extra goes with the main stop it adds the least walking to: a detour from there and back
-    onto the route. Listed in the order you would reach them."""
-    if not route:
-        return [{**e, "extra": True, "near_stop": None, "extra_minutes": None, **_place(e["gallery"])} for e in extras]
-    galleries = [r["gallery"] for r in route]
-    out = []
-    for e in extras:
-        best = None
-        for i, g in enumerate(galleries):
-            nxt = galleries[i + 1] if i + 1 < len(galleries) else None
-            detour = walk_cost(g, e["gallery"]) + (walk_cost(e["gallery"], nxt) - walk_cost(g, nxt) if nxt else 0)
-            cand = (round(detour, 6), walk_cost(g, e["gallery"]), i)  # ties go to the closer stop
-            if best is None or cand < best:
-                best = cand
-        detour, _, i = best
-        out.append({**e, "extra": True, "near_stop": i + 1, "near_title": route[i]["title"],
-                    "walk_minutes_from_stop": round(walk_cost(galleries[i], e["gallery"]) * MINUTES_PER_COST),
-                    "extra_minutes": round(detour * MINUTES_PER_COST + minutes_per_stop), **_place(e["gallery"])})
-    return sorted(out, key=lambda x: (x["near_stop"] or 0, x["extra_minutes"] or 0))
