@@ -12,6 +12,7 @@ plan_route        is code, not a model: it orders stops by walking distance.
 import asyncio
 import json
 import os
+import random
 import re
 import time
 from datetime import datetime, timezone
@@ -29,16 +30,50 @@ import wikipedia
 set_tracing_disabled(True)
 
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT", "")
-LEAD_MODEL = LitellmModel(model=os.environ.get("LEAD_MODEL", "vertex_ai/gemini-3.5-flash"), api_key="unused")
-RESEARCH_MODEL = LitellmModel(model=os.environ.get("RESEARCH_MODEL", "vertex_ai/gemini-3.5-flash"), api_key="unused")
-WRITER_MODEL = LitellmModel(model=os.environ.get("WRITER_MODEL", "vertex_ai/gemini-3.5-flash"), api_key="unused")
-_extra = {"vertex_location": "global", "timeout": 90, "num_retries": 2}
+# Gemini on Vertex AI runs on shared capacity: a tour's burst of parallel agents can be told "429
+# too many requests". So every model call goes through one gate (a few at a time), and a rate-limited
+# or briefly unavailable call waits and tries again, with growing pauses, instead of failing the answer.
+MODEL_CONCURRENCY = int(os.environ.get("MODEL_CONCURRENCY", "6"))
+MODEL_RETRIES = 6
+_model_gate = asyncio.Semaphore(MODEL_CONCURRENCY)
+
+
+def _busy(e: Exception) -> bool:
+    text = f"{type(e).__name__} {e}"
+    return any(k in text for k in ("RateLimit", "429", "RESOURCE_EXHAUSTED", "ServiceUnavailable", "503",
+                                   "InternalServerError", "500", "Timeout", "overloaded"))
+
+
+class GatedModel(LitellmModel):
+    async def get_response(self, *args, **kwargs):
+        for attempt in range(MODEL_RETRIES):
+            try:
+                async with _model_gate:
+                    return await super().get_response(*args, **kwargs)
+            except Exception as e:
+                if attempt == MODEL_RETRIES - 1 or not _busy(e):
+                    raise
+                await asyncio.sleep(min(30, 2 * 2 ** attempt) * (0.75 + random.random() / 2))  # ~2, 4, 8, 16, 30 s
+
+
+LEAD_MODEL = GatedModel(model=os.environ.get("LEAD_MODEL", "vertex_ai/gemini-3.5-flash"), api_key="unused")
+# One model per role, each set by its environment variable. All default to Flash: in a side-by-side
+# test (eval/compare.ipynb), Flash-Lite Researchers and Writer gave thinner evidence and a thinner
+# tour, and a judge rated it clearly worse.
+RESEARCH_MODEL = GatedModel(model=os.environ.get("RESEARCH_MODEL", "vertex_ai/gemini-3.5-flash"), api_key="unused")
+STORY_MODEL = GatedModel(model=os.environ.get("STORY_MODEL", "vertex_ai/gemini-3.5-flash"), api_key="unused")
+WRITER_MODEL = GatedModel(model=os.environ.get("WRITER_MODEL", "vertex_ai/gemini-3.5-flash"), api_key="unused")
+_extra = {"vertex_location": "global", "timeout": 90, "num_retries": 1}
 if PROJECT:
     _extra["vertex_project"] = PROJECT
 # Gemini 3 thinks at "high" by default; naming the level also returns summaries of its thinking,
 # which the page shows live. Researchers make many quick tool calls: little thinking keeps a tour fast.
 SETTINGS = ModelSettings(extra_args={**_extra, "reasoning_effort": os.environ.get("REASONING_EFFORT", "high")})
 RESEARCH_SETTINGS = ModelSettings(extra_args={**_extra, "reasoning_effort": os.environ.get("RESEARCH_EFFORT", "minimal")})
+# Storytellers and the Writer think at "low": much faster than "high", and a judge rated the tours
+# as good. At "high", Storytellers ran into the 75 s limit and some stops lost their stories.
+STORY_SETTINGS = ModelSettings(extra_args={**_extra, "reasoning_effort": os.environ.get("STORY_EFFORT", "low")})
+WRITER_SETTINGS = ModelSettings(extra_args={**_extra, "reasoning_effort": os.environ.get("WRITER_EFFORT", "low")})
 
 MAX_RESEARCHERS = 5
 LEAD_MAX_TURNS = 20
@@ -60,6 +95,7 @@ class Run:
         self.found: dict[str, dict] = {}   # interest -> {"direct": n, "related": n}, over all rounds
         self.needs_more: dict | None = None  # set when the latest findings leave a gap
         self.route: dict | None = None  # the latest route plan_route returned: the tour is built from this
+        self.candidates: dict[int, dict] = {}  # object_id -> the Researcher's candidate, with its cited evidence
         self.events: asyncio.Queue | None = None  # live steps for /chat/stream, if someone is watching
         self._ids = 0
         self.started = time.monotonic()
@@ -430,6 +466,10 @@ async def research(ctx: RunContextWrapper[Run], why: str, theme: str, interests:
             return {"slice": slice_, "agent": agent.name, "error": f"{type(e).__name__}: {str(e)[:200]}"}
 
     findings = await asyncio.gather(*(one(s) for s in slices))
+    for f in findings:  # kept in code, so write_tour gets the evidence without the Lead copying it out
+        for c in _parse_story(f.get("findings", "")).get("candidates") or []:
+            if isinstance(c, dict) and str(c.get("object_id", "")).isdigit():
+                run.candidates[int(c["object_id"])] = c
     coverage = _coverage(run, interests, findings)
     return _dump({"round": run.research_rounds, "findings": findings, "coverage": coverage})
 
@@ -481,6 +521,7 @@ def _coverage(run: Run, interests: list[str], findings: list[dict]) -> dict:
 # --- Storyteller ---
 
 STORYTELLER_MAX_TURNS = 9
+STORY_TIMEOUT = float(os.environ.get("STORY_TIMEOUT", "75"))  # seconds a tour stop's Storyteller gets
 
 storyteller = Agent(
     name="Storyteller",
@@ -534,14 +575,16 @@ Rules:
 - Spoken aloud too: short sentences, no lists, no parentheses.
 - Warm and concrete, like a good docent; no hype words ("stunning", "masterpiece", "famous",
   "testament", "vibrant", "incredible").""",
-    model=WRITER_MODEL,
-    model_settings=SETTINGS,
+    model=STORY_MODEL,
+    model_settings=STORY_SETTINGS,
     tools=[get_wikipedia, search_wikipedia],
 )
 
 
-async def _tell(run: Run, object_id: int, context: str) -> dict:
-    """One Storyteller, in a fresh context, for one object. Never raises: a failed story is a gap."""
+async def _tell(run: Run, object_id: int, context: str, limit: float | None = None) -> dict:
+    """One Storyteller, in a fresh context, for one object. Never raises: a failed story is a gap.
+    With a limit (seconds), a Storyteller still working when it runs out is stopped, and the stop
+    falls back on the Researcher's cited facts."""
     record = met_tools.get_object(object_id)
     if "error" in record:
         return {"object_id": object_id, "error": record["error"]}
@@ -553,7 +596,7 @@ async def _tell(run: Run, object_id: int, context: str) -> dict:
     prompt = f"{context}\n\nMet record:\n{_dump(record)}"
     out = {"object_id": object_id, "agent": agent.name, "title": _title(record),
            "maker": record.get("artist") or record.get("culture") or (record.get("department") or "").removesuffix(" Art"), "date": record.get("object_date") or ""}
-    try:
+    async def work() -> dict:
         result = await Runner.run(agent, prompt, context=run, hooks=HOOKS, max_turns=STORYTELLER_MAX_TURNS,
                                   error_handlers={"max_turns": _wrap_up})
         story = _tag_look_for(_parse_story(str(result.final_output)), object_id)
@@ -576,6 +619,15 @@ async def _tell(run: Run, object_id: int, context: str) -> dict:
         if story.get("story"):
             run.stories[object_id] = done
         return done
+
+    try:
+        return await (asyncio.wait_for(work(), limit) if limit else work())
+    except asyncio.TimeoutError:
+        # Shown in the live steps as what happened, not as the agent's own words
+        run.emit({"type": "limit", "agent": agent.name,
+                  "text": f"Stopped at the {limit:.0f}-second limit; this stop uses the Researcher's cited facts."})
+        run.emit({"type": "agent_end", "agent": agent.name})
+        return {**out, "error": f"timed out after {limit:.0f} s", "timed_out": True}
     except Exception as e:  # one story failing must not sink the tour
         return {**out, "error": f"{type(e).__name__}: {str(e)[:200]}"}
 
@@ -604,37 +656,26 @@ def _parse_story(text: str) -> dict:
     return d
 
 
-async def tell_stories(run: Run, object_ids: list[int], request: str, evidence_json: str) -> list[dict]:
-    """A Storyteller per stop, all in parallel."""
-    def context_for(oid: int) -> str:
-        found = [c for c in _candidates(evidence_json) if str(c.get("object_id")) == str(oid)]
-        return (f"Visitor request: {request}\n"
-                + (f"What the Researcher found:\n{_dump(found[0])}" if found else ""))
-    return list(await asyncio.gather(*(_tell(run, oid, context_for(oid)) for oid in object_ids)))
+async def tell_stories(run: Run, route_data: dict, request: str) -> list[dict]:
+    """A Storyteller per stop, all in parallel, each capped at STORY_TIMEOUT. As each one finishes,
+    its stop is sent to the page, laid out as in the final tour, so the visitor can start reading."""
+    numbered = _numbered(route_data)
 
+    async def one(n, s: dict) -> dict:
+        oid = s["object_id"]
+        found = run.candidates.get(oid)
+        context = f"Visitor request: {request}\n" + (f"What the Researcher found:\n{_dump(found)}" if found else "")
+        story = await _tell(run, oid, context, limit=STORY_TIMEOUT)
+        run.emit({"type": "stop", "object_id": oid, "n": str(n),
+                  "markdown": _stop_text(n, s, story, run.candidates)})
+        return story
 
-def _candidates(evidence_json: str) -> list[dict]:
-    """Pull candidate objects out of whatever shape the Lead passed as evidence."""
-    out = []
-    def walk(x):
-        if isinstance(x, dict):
-            if "object_id" in x:
-                out.append(x)
-            for v in x.values():
-                walk(v)
-        elif isinstance(x, list):
-            for v in x:
-                walk(v)
-        elif isinstance(x, str) and x.lstrip().startswith(("{", "[")):
-            try:
-                walk(json.loads(x))
-            except ValueError:
-                pass
-    try:
-        walk(json.loads(evidence_json))
-    except ValueError:
-        pass
-    return out
+    seen, jobs = set(), []
+    for n, s in numbered:
+        if s["object_id"] not in seen:
+            seen.add(s["object_id"])
+            jobs.append(one(n, s))
+    return list(await asyncio.gather(*jobs))
 
 
 @function_tool
@@ -662,6 +703,9 @@ for any term they may not know.
 For a tour, you write only its frame; the stops are laid out in code from the Storytellers'
 stories. Write exactly:
 ## <a title for the tour>
+<if the visitor also asked a question (how many, where, which), its answer first: direct and
+complete, with every number and gallery the evidence gives, e.g. "28 works, in five galleries:
+818 (10), 819 (11), …">
 <one to three sentences on the thread connecting the stops, from the stories, with tags>
 <<STOPS>>
 ### Before you go
@@ -684,7 +728,7 @@ Rules:
 - Plain, warm, concrete language; no hype words ("stunning", "masterpiece", "famous", "testament",
   "vibrant", "incredible"). No bold labels inside sentences.""",
     model=WRITER_MODEL,
-    model_settings=SETTINGS,
+    model_settings=WRITER_SETTINGS,
 )
 
 
@@ -716,7 +760,8 @@ async def _write(run: Run, prompt: str) -> str:
 
 
 @function_tool
-async def write_tour(ctx: RunContextWrapper[Run], why: str, request: str, route_json: str, evidence_json: str) -> str:
+async def write_tour(ctx: RunContextWrapper[Run], why: str, request: str, question: str = "",
+                     evidence_json: str = "") -> str:
     """Write the final tour: a Storyteller per stop (in parallel) explains each object in plain
     language with Wikipedia background; the stops are laid out in walking order, and the Writer adds
     the title, introduction and closing notes. Returns the tour text: reply with it as it is.
@@ -724,25 +769,18 @@ async def write_tour(ctx: RunContextWrapper[Run], why: str, request: str, route_
     Args:
         why: One short sentence, in plain words for a museum visitor watching you work, on why you are making this call.
         request: The visitor's request and constraints.
-        route_json: The JSON that plan_route returned.
-        evidence_json: The candidates and evidence for the chosen stops (from research), as JSON.
+        question: Anything else the visitor asked that the tour itself doesn't answer (e.g. "How many
+            Monets are on view, and where?"). Empty if nothing.
+        evidence_json: The tool results that answer that question (query results, snapshot_info), as JSON.
     """
     run = ctx.context
-    # Build from the route plan_route actually returned, not the Lead's copy of it: a copy can be
-    # cut short or reworded, and a tour built from it would have no stops.
+    # The route and the evidence come from the run itself (plan_route's result, the Researchers'
+    # candidates), not from a copy the Lead types out: faster, and nothing gets lost in copying.
     route_data = run.route or {}
-    if not route_data:
-        try:
-            parsed = json.loads(route_json)
-            route_data = parsed if isinstance(parsed, dict) else {}
-        except ValueError:
-            pass
-    stops = [s["object_id"] for key in ("stops", "extras", "cloisters_stops") for s in route_data.get(key, [])
-             if isinstance(s, dict) and "object_id" in s]
-    if not stops:
+    if not _numbered(route_data):
         return ("I couldn't put a walking route together this time, so I won't show you a tour without its stops. "
                 "Please ask again, and I'll plan it from scratch.")
-    stories = await tell_stories(run, list(dict.fromkeys(stops)), request, evidence_json)
+    stories = await tell_stories(run, route_data, request)
     by_id = {s["object_id"]: s for s in stories}
     unmet = [i for i, n in run.found.items() if n["direct"] == 0]
     missing = ("" if not unmet else
@@ -760,6 +798,9 @@ async def write_tour(ctx: RunContextWrapper[Run], why: str, request: str, route_
                 "do not repeat it.")
     # The Writer sees the planner's own route, without its notes: those go in below, as written
     route_view = {k: v for k, v in route_data.items() if k != "notes"}
+    if question.strip():
+        missing += (f"\n\nThe visitor also asked: {question}\nAnswer it first in the introduction, directly and "
+                    f"completely, from this evidence:\n{evidence_json or '(none given)'}")
     frame = await _write(run, f"Write the tour's frame.\n\nVisitor request: {request}\n\nRoute (in walking order; "
                               f"\"extras\" are in the tour, after the main stops):\n{_dump(route_view)}\n\n"
                               f"Stories, one per stop:\n{_dump(stories)}{missing}")
@@ -771,7 +812,7 @@ async def write_tour(ctx: RunContextWrapper[Run], why: str, request: str, route_
                 f"tour uses the closest things in the collection. [data]")
         frame = re.sub(r"^(##[^\n]*\n)", lambda m: m.group(1) + "\n" + note + "\n", frame, count=1) \
             if frame.lstrip().startswith("##") else note + "\n\n" + frame
-    body = _assemble(route_data, by_id, evidence_json)
+    body = _assemble(route_data, by_id, run.candidates)
     if STOPS_MARK in frame:
         return frame.replace(STOPS_MARK, body)
     return frame.rstrip() + "\n\n" + body
@@ -791,38 +832,46 @@ def _add_route_notes(frame: str, notes: list[str]) -> str:
     return frame.rstrip() + "\n\n### Before you go\n" + lines + "\n"
 
 
-def _assemble(route_data: dict, stories: dict, evidence_json: str) -> str:
-    """The stops, in walking order, written out from their stories: no model in between."""
-    evidence = {str(c.get("object_id")): c for c in _candidates(evidence_json)}
+def _numbered(route_data: dict) -> list[tuple]:
+    """Every stop with its number on the tour: main stops 1, 2, …; extras carry on the count; Cloisters C1, C2, …"""
+    main, extras = route_data.get("stops", []), route_data.get("extras", [])
+    out = [(i + 1, s) for i, s in enumerate(main)] + [(len(main) + i + 1, s) for i, s in enumerate(extras)]
+    out += [(f"C{i + 1}", s) for i, s in enumerate(route_data.get("cloisters_stops", []))]
+    return [(n, s) for n, s in out if isinstance(s, dict) and "object_id" in s]
 
-    def stop(n, s: dict) -> str:
-        st = stories.get(s["object_id"], {})
-        maker = ", ".join(x for x in (st.get("maker") or s.get("artist") or "", st.get("date") or "") if x)
-        when = f" · about {s['arrive_after_minutes']} min in" if s.get("arrive_after_minutes") is not None else ""
-        story = (st.get("story") or "").strip()
-        if not story:  # no story: fall back on the Researcher's evidence, with its sources
-            facts = (evidence.get(str(s["object_id"])) or {}).get("evidence") or []
-            story = " ".join(f"{f.get('fact', '').rstrip('.')}. [{f.get('source', '')}]" for f in facts if f.get("fact"))
-            story = story or f"The Met's record has the details. [met:{s['object_id']}]"
-        look = (st.get("look_for") or "").strip()
-        look = re.sub(r"^(look for|notice)\s*:?\s*", "", look, flags=re.I)
-        text = f"### {n}. {s.get('title') or st.get('title')} — Gallery {s.get('gallery')}\n"
-        text += (f"*{maker}*{when}\n\n" if maker else (f"*{when.strip(' ·')}*\n\n" if when else "\n"))
-        text += story + "\n"
-        if look:
-            text += f"\nLook for: {look}" + ("" if "[met:" in look else f" [met:{s['object_id']}]") + "\n"
-        return text
 
-    main = route_data.get("stops", [])
-    parts = [stop(i + 1, s) for i, s in enumerate(main)]
-    extras = route_data.get("extras", [])
+def _stop_text(n, s: dict, st: dict, candidates: dict) -> str:
+    """One stop, written out from its story: no model in between."""
+    maker = ", ".join(x for x in (st.get("maker") or s.get("artist") or "", st.get("date") or "") if x)
+    when = f" · about {s['arrive_after_minutes']} min in" if s.get("arrive_after_minutes") is not None else ""
+    story = (st.get("story") or "").strip()
+    if not story:  # no story: fall back on the Researcher's evidence, with its sources
+        facts = (candidates.get(s["object_id"]) or {}).get("evidence") or []
+        story = " ".join(f"{f.get('fact', '').rstrip('.')}. [{f.get('source', '')}]" for f in facts
+                         if isinstance(f, dict) and f.get("fact"))
+        story = story or f"The Met's record has the details. [met:{s['object_id']}]"
+    look = (st.get("look_for") or "").strip()
+    look = re.sub(r"^(look for|notice)\s*:?\s*", "", look, flags=re.I)
+    text = f"### {n}. {s.get('title') or st.get('title')} — Gallery {s.get('gallery')}\n"
+    text += (f"*{maker}*{when}\n\n" if maker else (f"*{when.strip(' ·')}*\n\n" if when else "\n"))
+    text += story + "\n"
+    if look:
+        text += f"\nLook for: {look}" + ("" if "[met:" in look else f" [met:{s['object_id']}]") + "\n"
+    return text
+
+
+def _assemble(route_data: dict, stories: dict, candidates: dict) -> str:
+    """The stops, in walking order, under their section headings."""
+    by_n = {str(n): _stop_text(n, s, stories.get(s["object_id"], {}), candidates) for n, s in _numbered(route_data)}
+    main, extras = route_data.get("stops", []), route_data.get("extras", [])
+    parts = [by_n[str(i + 1)] for i in range(len(main)) if str(i + 1) in by_n]
     if extras:
         parts.append("## Extras, if you have time\n")
-        parts += [stop(len(main) + i + 1, s) for i, s in enumerate(extras)]
+        parts += [by_n[str(len(main) + i + 1)] for i in range(len(extras)) if str(len(main) + i + 1) in by_n]
     cloisters = route_data.get("cloisters_stops", [])
     if cloisters:
         parts.append("## At The Met Cloisters\n")
-        parts += [stop(f"C{i + 1}", s) for i, s in enumerate(cloisters)]
+        parts += [by_n[f"C{i + 1}"] for i in range(len(cloisters)) if f"C{i + 1}" in by_n]
     return "\n".join(parts).strip()
 
 
@@ -861,43 +910,51 @@ async def write_answer(ctx: RunContextWrapper[Run], why: str, question: str, evi
 lead = Agent(
     name="Guide",
     instructions="""\
-You are a guide to The Met Fifth Avenue for visitors. You work only from tools: an on-view
-snapshot of the Met's collection, Wikipedia articles linked from it, and the Met's live API.
+You are Docent AI, a personal guide to The Met Fifth Avenue. Your job is to give each visitor the
+best possible answer to what they actually asked, however they ask it. Requests don't come in neat
+types: one message can ask for a count and a tour ("How many Monets are on view, and where? Plan me
+a tour of them."), name an object and ask what's nearby, or follow up on a stop from an earlier
+answer. Work out everything the visitor wants, gather the evidence for all of it, and answer all
+of it in one reply.
 
-Decide what the visitor needs:
+You work only from tools, never from memory:
+- research: sends 2 to 5 Researchers out in parallel, each through one slice of the museum, to find
+  objects for interests or themes. Use it whenever the visitor wants things to go and see.
+- run_sql, search_objects, gallery_summary, snapshot_info: exact counts, lists and what is in a
+  gallery, from the on-view data (snapshot_info gives the data's date).
+- find_by_accession, find_by_title, get_object: pin down one object (a label photo, an accession
+  number, a title, "the cat from stop 3"). Objects from earlier in the conversation keep their
+  object_id: use it rather than searching again.
+- tell_story: a Storyteller's plain-language story of one object, with Wikipedia background.
+- plan_route: puts objects in walking order and checks each one live with The Met. Use it for
+  anything the visitor is meant to walk to.
+- write_tour and write_answer: the Writer's final, citation-checked text. End every turn that
+  states facts with exactly one of them, and reply with its text as it is: write_tour when the
+  reply includes a walk (it can also answer questions alongside the tour), write_answer otherwise.
 
-A. A tour ("I have two hours and love Japan"):
-   - If the request is too vague to plan (no interests at all, e.g. "show me cool stuff"), ask one
-     short question about their interests and time, and stop.
-   - Otherwise your first tool call is research (no searching of your own first), with the visitor's interests (each in a word or two) and 2 to 5
-     slices that cover them across different departments. Then pick from the candidates: main stops, about one per 10 minutes of the
-     visitor's time (6 for an hour; 8 if they gave no time), varied, on theme, the strongest ones,
-     not crowded into one gallery; and 4 to 6 extras, good stops for a visitor with time to spare
-     (the route keeps the ones that continue the walk).
-   - Use the Researchers' candidates as they are: do not search the collection yourself during
-     a tour. Read research's coverage check: if its next_step says to search again, call research
-     once more with new slices aimed at the gaps (synonyms, other departments, related subjects),
-     keeping the same interests. Plan from everything both rounds found. If an interest is still
-     unmet after that, use the closest related objects; the tour will tell the visitor.
-   - Call plan_route with the main stops as object_ids, the extras as extra_ids, the visitor's
-     start gallery and time budget.
-   - Call write_tour with the request, plan_route's JSON, and the evidence for the chosen stops.
-     Its text goes to the visitor as it is.
-
-B. "What is this?" (a label photo, or an accession number / title they typed):
-   - Read the accession number, title and artist from the label. Call find_by_accession with the
-     title and artist as hints (or find_by_title if there is no number).
-   - Name an object only if the status is exact, corrected or near_confirmed. If it is ambiguous,
-     mismatch or not_found, say what you read and ask for the title or a clearer photo.
-   - Then call tell_story for it (a plain-language story with Wikipedia background), and
-     gallery_summary for its gallery, so you can suggest what to see next nearby.
-   - Call write_answer with the question and that evidence (the identification result, the story,
-     the gallery summary), and reply with its text as it is.
-   - If they are on a tour and ask what is next, re-plan with plan_route from their gallery.
-
-C. Questions about the collection ("how many Monets are on view?", "which gallery has the most
-   armor?"): use run_sql or search_objects (include object_id in queries that list objects), call
-   snapshot_info for the data's date, then write_answer with the results, and reply with its text.
+How to work:
+- Ask only when you truly cannot proceed (e.g. "show me cool stuff": no interests at all). Then ask
+  one short question about interests and time, and stop. Otherwise make a sensible assumption and
+  go ahead.
+- For a walk: call research first, with the visitor's interests in a word or two each. If a
+  single query already gives you exactly the set the visitor named (e.g. all works on view by one
+  artist), plan the walk from that query's results instead and skip research. If its coverage check says to search again, call research once
+  more with new slices aimed at the gaps (synonyms, other departments, related subjects); if an
+  interest is still unmet after that, use the closest related objects and the tour will say so.
+  During a tour, use the Researchers' candidates as they are.
+- Size the walk to the visitor: about one main stop per 10 minutes of their time (8 if they gave
+  no time), varied and not crowded into one gallery, plus 4 to 6 extras for a visitor with time to
+  spare; about 10 to 12 stops in all keeps the tour quick to write and to read. If they ask to see a whole set ("all the Monets") that is larger than that, make the
+  strongest of the set the stops and give the full set, with its galleries, in the answer.
+- If the visitor also asked something the tour itself doesn't answer (a count, where things are,
+  a comparison), get the exact answer with run_sql or search_objects and snapshot_info, in the same
+  step as research or your other first calls (call them together so they run at the same time),
+  and pass the question and those results to write_tour, so the reply answers it first.
+- For a single object: identify it (name an object only if find_by_accession's status is exact,
+  corrected or near_confirmed; otherwise say what you read and ask for the title or a clearer
+  photo), then tell_story, and gallery_summary for what to see next nearby.
+- For a follow-up about a stop or object already shown, work from that object's object_id:
+  get_object, tell_story if they want more, and answer exactly what they asked.
 
 Always:
 - You never write facts yourself: the Writer does, from the evidence you pass it. You may write

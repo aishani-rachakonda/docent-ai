@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cut">
 <title>Docent AI</title>
-<meta name="description" content="A pocket guide to what is on view at The Met right now: personal tours, label lookups, and answers you can check.">
+<meta name="description" content="Your personal guide to The Met: tours planned around your interests and time, from the 44,000+ objects on view, explained in plain language with every fact linked to its source.">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
 <style>
@@ -45,19 +45,80 @@ header { padding: 56px 0 8px; text-align: center; }
 .kicker { font-size: 17px; color: var(--accent); }
 header h1 { font-size: clamp(38px, 7vw, 58px); margin: 6px 0 0; letter-spacing: .16em; text-transform: uppercase; }
 header h1::after { content: ""; display: block; width: 72px; height: 1px; background: var(--ink); margin: 20px auto 0; }
-header p.lede { font-size: 20px; font-style: italic; color: var(--ink-2); margin: 20px auto 30px; max-width: 600px; }
-.how { display: grid; grid-template-columns: repeat(3, 1fr); margin: 0 0 8px; text-align: left;
-  border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
-.how div { padding: 18px 18px 20px; }
-.how div + div { border-left: 1px solid var(--line); }
-.how b { display: block; font-weight: 400; font-size: 17px; color: var(--accent);
-  font-variant-caps: all-small-caps; letter-spacing: .14em; margin-bottom: 6px; }
-.how span { color: var(--ink-2); font-size: 16px; }
+header p.lede { font-size: 20px; color: var(--ink-2); margin: 20px auto 30px; max-width: 600px; }
+/* Three things it does: a quiet strip, an icon and one line each */
+.how { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; max-width: 760px; margin: 0 auto 40px;
+  text-align: left; }
+.how > div { display: grid; grid-template-columns: 24px 1fr; column-gap: 12px; align-items: start; }
+.how svg { grid-row: span 2; color: var(--accent); margin-top: 2px; }
+.how b { font-weight: 400; font-size: 17px; color: var(--ink); font-variant-caps: all-small-caps; letter-spacing: .12em; }
+.how span { color: var(--ink-2); font-size: 15px; line-height: 1.45; }
+
+/* Landing showcase: one work steps forward at the center while its neighbours wait smaller and dimmer at
+   the sides; every few seconds the next one comes forward and the last steps back */
+.hero { margin: 0 0 30px; }
+.showcase { position: relative; margin: 0 calc(50% - 50vw) 8px; height: 380px; overflow: hidden;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent); }
+.sc-item { position: absolute; top: 20px; left: 50%; width: 300px; height: 340px; margin-left: -150px; padding: 18px;
+  display: flex; align-items: center; justify-content: center; background: var(--frame); border: 1px solid var(--line);
+  cursor: pointer; opacity: 0; transform: translateX(0) scale(.7);
+  transition: transform 1.2s cubic-bezier(.22, .61, .36, 1), opacity 1.2s ease, filter 1.2s ease, box-shadow 1.2s ease; }
+.sc-item img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
+.sc-item.center { box-shadow: 0 14px 34px rgba(31, 27, 22, .14); }
+.sc-item.side { filter: saturate(.55); }
+.sc-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+/* The centre work's label, set like a museum wall label: title, then maker and date, then where to find it */
+.sc-cap { max-width: 560px; margin: 0 auto 44px; min-height: 6.4em; text-align: center; transition: opacity .5s ease; }
+.sc-cap::before { content: ""; display: block; width: 28px; height: 1px; background: var(--rule); margin: 0 auto 14px; }
+.sc-cap.fading { opacity: 0; }
+.sc-cap .t { display: block; font-size: 20px; line-height: 1.3; font-style: italic; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-cap .m { display: block; margin-top: 6px; font-size: 15px; color: var(--ink-2); font-variant-caps: all-small-caps;
+  letter-spacing: .1em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-cap .g { display: block; margin-top: 4px; font-size: 14px; color: var(--accent); font-variant-caps: all-small-caps;
+  letter-spacing: .14em; }
+body.started .showcase, body.started .sc-cap { display: none; }
+@media (prefers-reduced-motion: reduce) { .sc-item, .sc-cap { transition: none; } }
+@media (max-width: 640px) {
+  .showcase { height: 290px; }
+  .sc-item { width: 220px; height: 260px; margin-left: -110px; padding: 12px; top: 14px; }
+}
+/* The landing page below the showcase is a little wider than the conversation */
+header .how, header .tours, header .fine { margin-left: calc(50% - min(520px, 50vw - 16px));
+  margin-right: calc(50% - min(520px, 50vw - 16px)); max-width: none; }
+body.started header .fine { margin-left: 0; margin-right: 0; }
+@media (max-width: 900px) {
+  header .how, header .tours, header .fine { margin-left: 0; margin-right: 0; }
+}
+
+/* Sample tours: one light card per request, its words only */
+.tours { max-width: 880px; margin: 0 auto; text-align: left; }
+.tours-head { display: flex; align-items: center; gap: 16px; margin: 0 0 18px; color: var(--accent); font-size: 16px;
+  font-variant-caps: all-small-caps; letter-spacing: .16em; }
+.tours-head::before, .tours-head::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+/* One even row per request, all the same width and height, read as buttons */
+.tour-grid { display: grid; grid-template-columns: 1fr; gap: 10px; max-width: 780px; margin: 0 auto; }
+.tour-card { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 64px; padding: 0;
+  text-align: left; cursor: pointer; font: inherit; color: inherit; background: var(--surface); border: 1px solid var(--line);
+  border-radius: 0; transition: border-color .2s ease, transform .2s ease, box-shadow .2s ease; }
+.tour-card::after { content: "\2192"; flex: none; padding-right: 20px; color: var(--accent); font-size: 20px;
+  transition: transform .2s ease; }
+.tour-card:hover::after { transform: translateX(4px); }
+.tour-card:hover { border-color: var(--ink-2); transform: translateY(-2px); box-shadow: 0 8px 22px rgba(31, 27, 22, .08); }
+.tour-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.tour-card .q { display: block; padding: 14px 0 14px 20px; font-size: 17px; line-height: 1.4; color: var(--ink); }
+@media (prefers-reduced-motion: reduce) {
+  .tour-card, .tour-card::after { transition: none; }
+  .tour-card:hover, .tour-card:hover::after { transform: none; }
+}
 body.started .how, body.started .lede { display: none; }
 body.started header { padding-top: 28px; }
 body.started header h1 { font-size: clamp(28px, 5vw, 36px); }
 body.started header h1::after { margin-top: 14px; }
-.fine { font-size: 14px; font-style: italic; color: var(--muted); margin: 14px auto 0; max-width: 620px; }
+.fine { font-size: 14px; font-style: italic; color: var(--muted); margin: 40px auto 0; padding-top: 16px; max-width: 880px;
+  border-top: 1px solid var(--line); }
+body.started .fine { margin-top: 10px; padding-top: 0; border-top: 0; }
 
 /* Conversation: a printed guide, not chat bubbles */
 #thread { padding: 24px 0 170px; display: flex; flex-direction: column; }
@@ -94,6 +155,15 @@ a.cite:hover { text-decoration: underline; }
 .card .photo { display: block; background: var(--frame); border: 1px solid var(--line); padding: 22px; }
 .card .photo img { display: block; width: 100%; max-height: 460px; object-fit: contain;
  }
+/* Pictures of the objects an answer (not a tour) talks about */
+.answer-objects { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; margin: 6px 0 22px; }
+.answer-objects.single { grid-template-columns: 1fr; }
+.answer-objects .obj { display: block; background: var(--frame); border: 1px solid var(--line); padding: 12px;
+  color: var(--ink-2); text-decoration: none; font-size: 14px; line-height: 1.35; }
+.answer-objects .obj img { display: block; width: 100%; height: 150px; object-fit: contain; margin-bottom: 8px; }
+.answer-objects.single .obj { padding: 22px; font-size: 15px; }
+.answer-objects.single .obj img { height: auto; max-height: 460px; }
+.answer-objects .obj .none { font-style: italic; color: var(--muted); padding: 10px 0; }
 .card .photo.none { padding: 18px; text-align: center; color: var(--muted); font-size: 15px; font-style: italic; }
 .card .content { padding: 20px 0 0; }
 .stopno { display: block; font-size: 16px; color: var(--accent); margin-bottom: 2px; }
@@ -137,15 +207,6 @@ details.work summary { cursor: pointer; font-size: 16px; color: var(--ink-2); }
 .thinking { color: var(--ink-2); font-size: 18px; font-style: italic; text-align: center; padding: 26px 0; }
 .thinking .elapsed { font-style: normal; font-size: 15px; color: var(--muted); margin-left: 8px; font-variant-numeric: tabular-nums; }
 
-/* Suggestions */
-.chips { display: grid; grid-template-columns: 1fr 1fr; gap: 0; margin: 26px 0 0; text-align: left;
-  border-top: 1px solid var(--line); }
-.chip { border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--ink); border-radius: 0;
-  padding: 12px 14px; font-size: 17px; font-style: italic; cursor: pointer; text-align: left; }
-.chip:nth-child(odd) { border-right: 1px solid var(--line); }
-.chip::before { content: "\2192\00a0"; font-style: normal; color: var(--accent); }
-.chip:hover { background: var(--surface); }
-
 /* Composer: a plain bar under a single rule */
 .composer { position: fixed; left: 0; right: 0; bottom: 0; background: var(--bg); border-top: 1px solid var(--rule);
   padding: 12px 0 calc(12px + env(safe-area-inset-bottom)); }
@@ -168,10 +229,7 @@ details.work summary { cursor: pointer; font-size: 16px; color: var(--ink-2); }
 @media (max-width: 640px) {
   body { font-size: 17px; }
   header { padding-top: 32px; }
-  .how { grid-template-columns: 1fr; }
-  .how div + div { border-left: 0; border-top: 1px solid var(--line); }
-  .chips { grid-template-columns: 1fr; }
-  .chip:nth-child(odd) { border-right: 0; }
+  .how { grid-template-columns: 1fr; gap: 16px; margin-bottom: 32px; }
   .card .photo { padding: 12px; }
   .msg.guide .card h3 { font-size: 24px; }
   .card.speaking .content { margin-left: -12px; padding-left: 10px; }
@@ -229,6 +287,32 @@ details.notes summary::-webkit-details-marker { display: none; }
 details.notes summary::after { content: " \25B8"; color: var(--accent); }
 details.notes[open] summary::after { content: " \25BE"; }
 details.notes ul { margin-top: 0; font-size: 16px; color: var(--ink-2); }
+
+/* A tour taking shape: the route is laid out first, and each stop's story arrives when it is written */
+.tour-preview .pv-progress { height: 1px; background: var(--line); margin: 0 0 4px; position: relative; overflow: hidden; }
+.tour-preview .pv-progress span { position: absolute; inset: 0 auto 0 0; width: 0; background: var(--accent);
+  transition: width .8s ease; }
+.tour-preview .ov-sum .pv-ready { display: block; font-size: 15px; color: var(--ink-2); font-style: italic; margin-top: 2px; }
+.card.waiting .photo img { filter: grayscale(.85) opacity(.55); transition: filter 1.2s ease; }
+.card.waiting h3 { color: var(--ink-2); }
+.story-pending { margin-top: 24px; }
+.story-pending .sk { display: block; height: 11px; margin: 14px 0; background: linear-gradient(90deg,
+  var(--surface-2) 0%, var(--frame) 40%, var(--surface-2) 80%); background-size: 300% 100%;
+  animation: sheen 2.4s ease-in-out infinite; }
+.story-pending .sk:nth-child(3) { width: 92%; } .story-pending .sk:nth-child(4) { width: 64%; }
+.story-pending .pv-note { font-size: 15px; font-style: italic; color: var(--muted); margin: 10px 0 0; }
+@keyframes sheen { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }
+.card.arrived { animation: arrive .9s ease both; }
+.card.arrived .photo img { animation: develop 1.4s ease both; }
+@keyframes arrive { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes develop { from { filter: grayscale(.85) opacity(.55); } to { filter: none; } }
+.ov-list li.ready .ov-n::after { content: ""; display: block; width: 5px; height: 5px; margin: 2px auto 0; background: var(--accent); }
+.ov-list li.waiting .ov-t { color: var(--muted); }
+.step.limit { font-size: 15px; font-style: italic; color: var(--warn); padding: 6px 10px; }
+@media (prefers-reduced-motion: reduce) {
+  .story-pending .sk, .card.arrived, .card.arrived .photo img { animation: none; }
+  .tour-preview .pv-progress span { transition: none; }
+}
 
 @media (max-width: 640px) {
   .listen.stop-listen, .ov-top .listen { width: 100%; justify-content: center; }
@@ -307,21 +391,41 @@ details.steps.live .steps-count::before { content: ""; display: inline-block; wi
 <body>
 <div class="wrap">
   <header>
-    <h1>Docent AI</h1>
-    <p class="lede">A pocket guide built on what is actually on view today: a tour planned around your interests and time,
-      a quick answer when a label catches your eye, and numbers you can check.</p>
+    <div class="hero">
+      <div class="hero-text">
+        <h1>Docent AI</h1>
+        <p class="lede">Your personal guide to The Met. Tell it what you love and how much time you have: it searches the
+          44,000+ objects currently on view, across 421 galleries and 19 departments, and plans a walking tour just for you.</p>
+      </div>
+    </div>
+    <div class="showcase" id="showcase" hidden aria-roledescription="carousel" aria-label="Works on view now"></div>
+    <p class="sc-cap" id="showcaseCap" aria-live="off"></p>
     <div class="how">
-      <div><b>Plan a tour</b><span>Say what you like and how long you have. You get a walking route with a picture and a plain-language story for each stop, and you can listen as you go.</span></div>
-      <div><b>Ask about a label</b><span>Snap the wall label or type its number. A misread number is caught by checking the title.</span></div>
-      <div><b>Ask the collection</b><span>"How many Monets are on view?" Answers come from the data, with every fact linked to its source.</span></div>
+      <div><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="5" cy="18" r="2"/><circle cx="19" cy="6" r="2"/><path d="M7 18h6a3 3 0 0 0 0-6h-2a3 3 0 0 1 0-6h6"/></svg><b>Plan a tour</b><span>A walking route around what you love, with a story at every stop.</span></div>
+      <div><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="6" width="17" height="12" rx="1"/><path d="M7 10h10M7 14h6"/></svg><b>Read an object label</b><span>Type the number from an object label and learn what you're looking at.</span></div>
+      <div><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M5 20V11M12 20V4M19 20v-6M3 20h18"/></svg><b>Ask the collection</b><span>Counts and locations, straight from the data.</span></div>
     </div>
-    <p class="fine">An independent guide, drawn from The Met’s Open Access collection. Not affiliated with The Metropolitan Museum of Art.</p>
-    <div class="chips" id="chips">
-      <button class="chip">I have an hour and love animals, especially cats and horses. Plan me a tour.</button>
-      <button class="chip">90 minutes on power and death in the ancient world</button>
-      <button class="chip">The label says 1993.13, "Wheat Field with Cypresses". What is it?</button>
-      <button class="chip">How many works by Claude Monet are on view, and where?</button>
+    <div class="tours" id="chips">
+      <p class="tours-head">Start with a tour</p>
+      <div class="tour-grid">
+        <button class="tour-card" data-q="I have an hour and love animals, especially cats and horses. Plan me a tour.">
+          <span class="q">I have an hour and love animals, especially cats and horses. Plan me a tour.</span>
+        </button>
+        <button class="tour-card" data-q="How many works by Claude Monet are on view, and where? Plan me a tour of them.">
+          <span class="q">How many works by Claude Monet are on view, and where? Plan me a tour of them.</span>
+        </button>
+        <button class="tour-card" data-q="It's my first time at The Met and I've always been fascinated by ancient Egypt. Can you show me the highlights in about an hour?">
+          <span class="q">It's my first time at The Met and I've always been fascinated by ancient Egypt. Can you show me the highlights in about an hour?</span>
+        </button>
+        <button class="tour-card" data-q="Can you plan a 45-minute tour of Greek and Roman gods and heroes?">
+          <span class="q">Can you plan a 45-minute tour of Greek and Roman gods and heroes?</span>
+        </button>
+        <button class="tour-card" data-q="I'd love to spend 90 minutes with Chinese art, especially ceramics and landscape paintings.">
+          <span class="q">I'd love to spend 90 minutes with Chinese art, especially ceramics and landscape paintings.</span>
+        </button>
+      </div>
     </div>
+    <p class="fine">An independent project built on The Met’s Open Access data. Not affiliated with The Metropolitan Museum of Art.</p>
   </header>
 
   <main id="thread" aria-live="polite"></main>
@@ -331,11 +435,8 @@ details.steps.live .steps-count::before { content: ""; display: inline-block; wi
   <div class="wrap">
     <div class="preview" id="preview"><img alt="Label photo to send"><span>Label photo attached</span><button id="clearImg" type="button">Remove</button></div>
     <form class="bar" id="form">
-      <label class="icon-btn" title="Add a photo of a wall label">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
-        <span class="sr">Add a photo of a wall label</span>
-        <input type="file" id="photo" accept="image/*" capture="environment" hidden>
-      </label>
+      <!-- Label photos are switched off for now: no button opens this input -->
+      <input type="file" id="photo" accept="image/*" hidden>
       <textarea id="input" rows="1" placeholder="Plan a tour, ask about a label, or ask the collection…" aria-label="Message"></textarea>
       <button class="send" id="send" type="submit">Ask</button>
     </form>
@@ -370,7 +471,75 @@ window.addEventListener("DOMContentLoaded", () => {
 });
 
 
-document.querySelectorAll(".chip").forEach(c => c.addEventListener("click", () => { input.value = c.textContent; ask(); }));
+document.querySelectorAll(".tour-card").forEach(c => c.addEventListener("click", () => { input.value = c.dataset.q; ask(); }));
+
+// Landing showcase: random Met highlights on view. Each sits at a place relative to the current one
+// (0 = center, ±1 beside it, ±2 further out); stepping on moves them all one place, so the next work comes
+// forward, grows and brightens while the last one steps back. Works more than two places away are hidden,
+// which is where one wraps from the far left to the far right unseen.
+(async function showcase() {
+  const stage = document.getElementById("showcase"), cap = document.getElementById("showcaseCap");
+  let items = [];
+  try { items = await fetch("/featured?n=12").then(r => r.ok ? r.json() : []); } catch (e) { return; }
+  const n = items.length;
+  if (n < 6) return;
+  const nodes = items.map((o, i) => {
+    const b = el("button", "sc-item"), img = el("img");
+    o.name = String(o.title || "").split("|").pop().trim();
+    img.src = o.image_small_url; img.alt = o.name;
+    b.type = "button"; b.append(img);
+    b.addEventListener("click", () => {
+      if (i === cur) window.open(o.met_url, "_blank", "noopener"); else { go(i); restart(); }
+    });
+    stage.append(b);
+    return b;
+  });
+  let cur = 0, timer = null, paused = false;
+  const small = () => matchMedia("(max-width: 640px)").matches;
+  function place() {
+    const gap = small() ? 190 : 290;
+    nodes.forEach((b, i) => {
+      let rel = (i - cur + n) % n;
+      if (rel > n / 2) rel -= n;
+      const d = Math.abs(rel);
+      const scale = d === 0 ? 1 : d === 1 ? .74 : .6;
+      b.style.transform = `translateX(${rel * gap}px) scale(${scale})`;
+      b.style.opacity = d === 0 ? 1 : d === 1 ? .6 : d === 2 ? .28 : 0;
+      b.style.zIndex = 10 - d;
+      b.classList.toggle("center", d === 0);
+      b.classList.toggle("side", d > 0);
+      b.tabIndex = d <= 1 ? 0 : -1;
+      b.setAttribute("aria-hidden", d > 1 ? "true" : "false");
+      b.title = d === 0 ? `${items[i].name} · Open The Met's page` : items[i].name;
+    });
+    const o = items[cur];
+    cap.classList.add("fading");
+    setTimeout(() => {
+      const t = el("span", "t"), m = el("span", "m"), g = el("span", "g");
+      t.textContent = o.name;
+      m.textContent = [o.maker, o.object_date].filter(Boolean).join(", ");
+      g.textContent = o.gallery ? `Gallery ${o.gallery}` : "";
+      cap.replaceChildren(t, m, g);
+      cap.classList.remove("fading");
+    }, 300);
+  }
+  function go(i) { cur = (i + n) % n; place(); }
+  const slow = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  function restart() {
+    clearInterval(timer);
+    timer = setInterval(() => {
+      if (!paused && !document.hidden && !document.body.classList.contains("started")) go(cur + 1);
+    }, slow ? 9000 : 2000);
+  }
+  stage.addEventListener("mouseenter", () => paused = true);
+  stage.addEventListener("mouseleave", () => paused = false);
+  stage.addEventListener("focusin", () => paused = true);
+  stage.addEventListener("focusout", () => paused = false);
+  addEventListener("resize", place);
+  stage.hidden = false;
+  place();
+  restart();
+})();
 form.addEventListener("submit", e => { e.preventDefault(); ask(); });
 input.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(); } });
 if (matchMedia("(max-width: 640px)").matches) input.placeholder = "Ask the docent…";
@@ -414,6 +583,7 @@ async function ask() {
   thread.appendChild(pending);
   pending.scrollIntoView({ behavior: "smooth", block: "start" });
   const events = [], started = Date.now();
+  let tourView = null;
 
   try {
     const r = await fetch("/chat/stream", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -432,7 +602,20 @@ async function ask() {
         const e = JSON.parse(line.slice(6));
         if (e.type === "done") { const { type, ...rest } = e; data = rest; }
         else if (e.type === "start") { sessionId = e.session_id; }
-        else { events.push(e); steps.add(e); }
+        else if (e.type === "stop") { if (tourView) tourView.fill(e); }
+        else {
+          events.push(e); steps.add(e);
+          if (e.type === "result" && e.name === "plan_route" && e.agent === "Guide") {
+            let route = null;
+            try { route = JSON.parse(e.result); } catch (err) {}
+            if (route && (route.stops || []).length) {
+              const next = new TourPreview(route);
+              if (tourView) tourView.el.replaceWith(next.el); else pending.appendChild(next.el);
+              tourView = next;
+              steps.el.open = false;  // the stage moves to the tour; the steps stay one tap away
+            }
+          }
+        }
       }
     }
     if (!data) throw new Error("the connection closed before the answer arrived");
@@ -440,7 +623,13 @@ async function ask() {
     try { sessionStorage.setItem("guide-session", sessionId); } catch (e) {}
     const seconds = Math.round((Date.now() - started) / 1000);
     steps.finish(seconds);
-    pending.replaceWith(renderGuide(data, events, seconds));
+    // Swap in the finished tour without moving the stop the visitor is reading
+    const anchor = tourView && tourView.readingCard();
+    const before = anchor && anchor.getBoundingClientRect().top;
+    const done = renderGuide(data, events, seconds);
+    pending.replaceWith(done);
+    const same = anchor && done.querySelector(`#${anchor.id}`);
+    if (same) window.scrollBy(0, same.getBoundingClientRect().top - before);
     remember({ role: "guide", data, events: events.map(slimEvent), seconds });
   } catch (e) {
     steps.finish();
@@ -492,16 +681,7 @@ function renderGuide(data, events, seconds) {
   if (steps.lanes.size) m.appendChild(steps.el);
   const html = DOMPurify.sanitize(marked.parse(citeLinks(data.response || ""), { breaks: true }), { ADD_ATTR: ["target"] });
   const body = el("div"); body.innerHTML = html;
-  // One chip per source per paragraph: keep the last mention, drop the repeats before it
-  body.querySelectorAll("p, li").forEach(block => {
-    const seen = new Set();
-    [...block.querySelectorAll("a.cite")].reverse().forEach(a => {
-      if (!seen.has(a.href)) { seen.add(a.href); return; }
-      const before = a.previousSibling;  // the space added before the chip
-      if (before && before.nodeType === 3) before.textContent = before.textContent.replace(/\s+$/, "");
-      a.remove();
-    });
-  });
+  dedupeChips(body);
 
   // A tour: turn each "### n. Title — Gallery N" section into a card with its picture, story and audio
   let route = null;
@@ -519,8 +699,52 @@ function renderGuide(data, events, seconds) {
     tools.append(listenButton(() => [{ segs: answerSegs(body) }], body, "Listen"), speedButton());
     body.prepend(tools);
   }
+  if (!cards.length) answerPictures(body);
   m.appendChild(body);
   return m;
+}
+
+// An answer that isn't a tour: show the objects it cites, with their pictures, linked to The Met
+function answerPictures(body) {
+  const ids = [...new Set([...body.querySelectorAll("a.cite")]
+    .map(a => (a.href.match(/search\/(\d+)/) || [])[1]).filter(Boolean))].slice(0, 6);
+  if (!ids.length) return;
+  fetch("/objects?ids=" + ids.join(",")).then(r => r.ok ? r.json() : []).then(objs => {
+    const shown = objs;
+    if (!shown.length) return;
+    const wrap = el("div", "answer-objects" + (shown.length === 1 ? " single" : ""));
+    shown.forEach(o => {
+      const a = el("a", "obj");
+      if (o.met_url) { a.href = o.met_url; a.target = "_blank"; a.rel = "noopener"; a.title = "Open The Met's page for this object"; }
+      const title = String(o.title || "").split("|").pop().trim();
+      const cap = el("div"); cap.textContent = title + (o.gallery ? ` · Gallery ${o.gallery}` : "");
+      if (o.image_small_url) {
+        const img = el("img"); img.src = o.image_small_url; img.alt = title; img.loading = "lazy";
+        a.append(img);
+      } else {  // as on a tour card: say why there is no picture
+        const none = el("div", "none");
+        none.textContent = "No open-access image of this object. The Met shares pictures only of public-domain works.";
+        a.append(none);
+      }
+      a.append(cap);
+      wrap.append(a);
+    });
+    const tools = body.querySelector(".answer-tools");
+    tools ? tools.after(wrap) : body.prepend(wrap);
+  }).catch(() => {});
+}
+
+// One chip per source per paragraph: keep the last mention, drop the repeats before it
+function dedupeChips(body) {
+  body.querySelectorAll("p, li").forEach(block => {
+    const seen = new Set();
+    [...block.querySelectorAll("a.cite")].reverse().forEach(a => {
+      if (!seen.has(a.href)) { seen.add(a.href); return; }
+      const before = a.previousSibling;  // the space added before the chip
+      if (before && before.nodeType === 3) before.textContent = before.textContent.replace(/\s+$/, "");
+      a.remove();
+    });
+  });
 }
 
 // --- Tour cards ---
@@ -700,6 +924,87 @@ function tourBar(route, cards) {
   });
   nav.appendChild(list);
   return nav;
+}
+
+// While the stories are written: the route laid out at once, each stop's card filling in as its
+// Storyteller finishes (stories finish in any order; each lands in its place on the walk)
+class TourPreview {
+  constructor(route) {
+    this.route = route;
+    this.el = el("div", "tour-preview");
+    const main = route.stops || [], extras = route.extras || [], cloisters = route.cloisters_stops || [];
+    const stops = [...main.map((s, i) => [String(i + 1), s]), ...extras.map((s, i) => [String(main.length + i + 1), { ...s, extra: true }]),
+                   ...cloisters.map((s, i) => ["C" + (i + 1), s])];
+    this.total = stops.length; this.ready = 0;
+    const nav = el("nav", "overview");
+    const top = el("div", "ov-top"), sum = el("div", "ov-sum");
+    sum.innerHTML = '<span class="ov-label">Your tour is taking shape</span>';
+    sum.appendChild(document.createTextNode(`${main.length} stops · about ${route.total_minutes} min` +
+      (extras.length ? ` · ${extras.length} extra${extras.length > 1 ? "s" : ""} if you have time` : "")));
+    this.status = el("span", "pv-ready"); sum.appendChild(this.status);
+    top.appendChild(sum); nav.appendChild(top);
+    const bar = el("div", "pv-progress"); this.fillBar = el("span"); bar.appendChild(this.fillBar); nav.appendChild(bar);
+    const list = el("ol", "ov-list");
+    this.cards = {}; this.items = {};
+    const cards = el("div");
+    stops.forEach(([n, s], k) => {
+      if (s.extra && !(stops[k - 1] || [0, {}])[1].extra) {
+        const sep = el("li", "ov-sep"); sep.textContent = "If you have time"; list.appendChild(sep);
+        const h = el("h2", "extras-head"); h.textContent = "Extras, if you have time"; cards.appendChild(h);
+      }
+      const card = makeCard(n, s.title || "", s.gallery, { ...s, checked_at: route.checked_at }, []);
+      card.classList.add("waiting");
+      card.querySelector(".actions")?.remove();
+      const wait = el("div", "story-pending");
+      const head = el("div", "story-head"); head.textContent = "The story";
+      wait.append(head, el("span", "sk"), el("span", "sk"), el("span", "sk"));
+      const note = el("p", "pv-note"); note.textContent = "A Storyteller is reading up on this one.";
+      wait.appendChild(note);
+      card.querySelector(".content").appendChild(wait);
+      cards.appendChild(card);
+      this.cards[n] = card;
+      const li = el("li", "waiting" + (s.extra ? " extra" : "")), a = el("a");
+      a.href = "#" + card.id;
+      a.addEventListener("click", ev => { ev.preventDefault(); this.cards[n].scrollIntoView({ behavior: "smooth", block: "start" }); });
+      const num = el("span", "ov-n"); num.textContent = s.extra ? "+" : n;
+      const t = el("span", "ov-t"); t.textContent = card.dataset.title;
+      const g = el("span", "ov-g"); g.textContent = `Gallery ${card.dataset.gallery}`;
+      a.append(num, t, g); li.appendChild(a); list.appendChild(li);
+      this.items[n] = li;
+    });
+    nav.appendChild(list);
+    this.el.append(nav, cards);
+    this.progress();
+  }
+
+  progress() {
+    this.status.textContent = this.ready === 0 ? "The Storytellers are writing each stop. They will appear here as they are ready."
+      : this.ready < this.total ? `${this.ready} of ${this.total} stops ready. The rest are on their way.`
+      : "Every stop is ready. Adding the finishing touches.";
+    this.fillBar.style.width = `${Math.round(100 * this.ready / this.total)}%`;
+  }
+
+  fill(e) {
+    const old = this.cards[e.n];
+    if (!old || !old.classList.contains("waiting")) return;
+    const body = el("div");
+    body.innerHTML = DOMPurify.sanitize(marked.parse(citeLinks(e.markdown || ""), { breaks: true }), { ADD_ATTR: ["target"] });
+    dedupeChips(body);
+    const card = buildCards(body, this.route)[0];
+    if (!card) return;
+    card.classList.add("arrived");
+    old.replaceWith(card);
+    this.cards[e.n] = card;
+    this.items[e.n].className = "ready" + (card.classList.contains("extra") ? " extra" : "");
+    this.ready += 1;
+    this.progress();
+  }
+
+  // The card nearest the top of the screen, to keep in place when the finished tour replaces this
+  readingCard() {
+    const all = Object.values(this.cards);
+    return all.filter(c => c.getBoundingClientRect().top <= 120).pop() || null;
+  }
 }
 
 // What a stop's audio reads, as sentences marked in the page: the stop and title, what to look for,
@@ -1112,6 +1417,9 @@ class Steps {
       if (m) t.append(head);
       t.append(text);
       this.push(l, t);
+    } else if (e.type === "limit") {
+      const t = el("div", "step limit"); t.textContent = e.text;
+      this.push(this.lane(e.agent), t);
     } else if (e.type === "call") {
       const l = this.lane(e.agent);
       if (!this.live || e.agent === "Citation check") this.state(e.agent, e.agent === "Citation check" && this.live);

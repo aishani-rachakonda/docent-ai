@@ -1,0 +1,65 @@
+[
+ {
+  "order": "A=baseline, B=faster",
+  "scores": {
+   "baseline": {
+    "relevance": 5,
+    "explanation": 5,
+    "grounding": 5,
+    "look_for": 4,
+    "writing": 5,
+    "completeness": 5
+   },
+   "faster": {
+    "relevance": 4,
+    "explanation": 5,
+    "grounding": 5,
+    "look_for": 5,
+    "writing": 5,
+    "completeness": 5
+   }
+  },
+  "better": "baseline",
+  "difference": "clear",
+  "reasons": "Tour A is better overall because of its globally diverse selection of objects, introducing beautiful Chinese Tang and Ming dynasty works alongside European and Egyptian art to create a richer historical narrative. Additionally, Tour A's 'Before you go' disclaimers are highly sophisticated, addressing genuine scholarly ambiguities and data gaps (such as the attribution of the horse armor or the artist's self-portrait) rather than the generic platitudes found in Tour B. While Tour B has slightly more detailed 'Look for' prompts, Tour A's inclusion of actual animal representations (like the Tang ceramic horse) is more satisfying than Tour B's inclusion of a saddle or a lion cub.",
+  "weakest_stops": {
+   "baseline": [],
+   "faster": [
+    "2",
+    "8"
+   ]
+  }
+ },
+ {
+  "order": "A=faster, B=baseline",
+  "scores": {
+   "faster": {
+    "relevance": 5,
+    "explanation": 5,
+    "grounding": 5,
+    "look_for": 5,
+    "writing": 5,
+    "completeness": 5
+   },
+   "baseline": {
+    "relevance": 5,
+    "explanation": 5,
+    "grounding": 5,
+    "look_for": 3,
+    "writing": 4,
+    "completeness": 4
+   }
+  },
+  "better": "faster",
+  "difference": "clear",
+  "reasons": "Tour A is clearly better because its 'Look for' prompts are highly concrete and direct the visitor's eyes to specific, easily missed details (such as a hospital dome in the background of the painting or the mounting pins on the cat statue), whereas Tour B's prompts are disappointingly generic. Additionally, Tour A organizes its physical route much more logically, keeping the adjacent Arms and Armor galleries together on the first floor before moving upstairs, whereas Tour B jumps erratically between wings. Finally, Tour A's narrative voice is warmer and more engaging to read aloud.",
+  "weakest_stops": {
+   "faster": [
+    "8"
+   ],
+   "baseline": [
+    "6"
+   ]
+  }
+ }
+]

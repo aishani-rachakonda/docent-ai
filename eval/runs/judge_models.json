@@ -1,0 +1,136 @@
+{
+ "faster": [
+  {
+   "order": "A=faster, B=models",
+   "scores": {
+    "faster": {
+     "relevance": 5,
+     "explanation": 5,
+     "grounding": 5,
+     "look_for": 5,
+     "writing": 5,
+     "completeness": 5
+    },
+    "models": {
+     "relevance": 4,
+     "explanation": 3,
+     "grounding": 5,
+     "look_for": 2,
+     "writing": 3,
+     "completeness": 2
+    }
+   },
+   "better": "faster",
+   "difference": "large",
+   "reasons": "Tour A provides a cohesive, complete tour that strictly adheres to the requested themes with good time management. Tour A's 'Look for' directives are highly specific and guide the visitor's eyes to interesting details. In contrast, Tour B includes incomplete stub entries for multiple stops (including one in the main route), and its 'Look for' prompts are frequently generic or missing altogether.",
+   "weakest_stops": {
+    "faster": [
+     "7",
+     "8"
+    ],
+    "models": [
+     "6",
+     "7"
+    ]
+   }
+  },
+  {
+   "order": "A=models, B=faster",
+   "scores": {
+    "models": {
+     "relevance": 4,
+     "explanation": 3,
+     "grounding": 5,
+     "look_for": 3,
+     "writing": 4,
+     "completeness": 2
+    },
+    "faster": {
+     "relevance": 5,
+     "explanation": 5,
+     "grounding": 5,
+     "look_for": 5,
+     "writing": 5,
+     "completeness": 5
+    }
+   },
+   "better": "faster",
+   "difference": "large",
+   "reasons": "Tour B successfully provides an engaging, fully fleshed-out tour that directly answers the user's request with an excellent selection of cats and horses. It clearly explains unfamiliar terms, maintains a warm tone, and offers concrete 'Look for' prompts at every single stop. Tour A suffers significantly because stops 6 and 7 are entirely bare stubs lacking stories, explanations, and 'Look for' sections.",
+   "weakest_stops": {
+    "models": [
+     "6",
+     "7"
+    ],
+    "faster": []
+   }
+  }
+ ],
+ "baseline": [
+  {
+   "order": "A=baseline, B=models",
+   "scores": {
+    "baseline": {
+     "relevance": 5,
+     "explanation": 5,
+     "grounding": 5,
+     "look_for": 4,
+     "writing": 5,
+     "completeness": 5
+    },
+    "models": {
+     "relevance": 4,
+     "explanation": 3,
+     "grounding": 4,
+     "look_for": 2,
+     "writing": 3,
+     "completeness": 1
+    }
+   },
+   "better": "baseline",
+   "difference": "large",
+   "reasons": "Tour A delivers a well-paced, highly engaging tour that perfectly matches the visitor's interests in cats and horses while providing thorough and accessible explanations for every stop. Tour B completely fails on completeness, as Stop 6 in the main route and Stop 7 in the extras are literal one-sentence stubs missing context and 'Look for' directions. Tour A is also slightly closer to the requested one-hour timeframe.",
+   "weakest_stops": {
+    "baseline": [
+     "2",
+     "4"
+    ],
+    "models": [
+     "6",
+     "7"
+    ]
+   }
+  },
+  {
+   "order": "A=models, B=baseline",
+   "scores": {
+    "models": {
+     "relevance": 4,
+     "explanation": 4,
+     "grounding": 4,
+     "look_for": 3,
+     "writing": 3,
+     "completeness": 2
+    },
+    "baseline": {
+     "relevance": 5,
+     "explanation": 5,
+     "grounding": 5,
+     "look_for": 5,
+     "writing": 5,
+     "completeness": 5
+    }
+   },
+   "better": "baseline",
+   "difference": "large",
+   "reasons": "Tour B is significantly better because it provides a complete, engaging story for every stop, whereas Tour A includes two obvious stubs (stops 6 and 7) with no real narrative or 'Look for' prompts. Tour B also offers excellent explanations of specialized terms like 'barding', 'animalier', and 'sancai' while maintaining a warm, accessible, and less formulaic tone. Both tours effectively target the requested cats and horses theme, but Tour B provides a much more polished and usable museum experience.",
+   "weakest_stops": {
+    "models": [
+     "6",
+     "7"
+    ],
+    "baseline": []
+   }
+  }
+ ]
+}

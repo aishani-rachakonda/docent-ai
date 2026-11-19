@@ -59,6 +59,37 @@ def snapshot():
     return met_tools.snapshot_info()
 
 
+@app.get("/featured")
+def featured(n: int = 12):
+    """A random handful of Met highlights on view at Fifth Avenue with open-access pictures, for the landing page."""
+    return met_tools._rows("""
+        SELECT object_id, COALESCE(title, concat_ws(', ', object_name, culture)) AS title, gallery, image_small_url, met_url,
+               COALESCE(NULLIF(artist, ''), culture) AS maker, object_date
+        FROM objects
+        WHERE is_highlight AND image_small_url IS NOT NULL AND department <> 'The Cloisters'
+        ORDER BY random() LIMIT ?""", [max(1, min(n, 24))])
+
+
+@app.get("/objects")
+async def objects(ids: str):
+    """Title, gallery, picture and Met page for a few objects, so an answer can show what it talks about.
+    Some pictures are missing from the snapshot; for those, ask the Met API, as the tour's live check does."""
+    out = []
+    for oid in [int(i) for i in ids.split(",") if i.strip().isdigit()][:12]:
+        o = met_tools.get_object(oid)
+        if "error" not in o:
+            out.append({**{k: o.get(k) for k in ("object_id", "artist", "object_date", "gallery", "image_small_url", "met_url")},
+                        "title": guide._title(o)})
+    gaps = [o["object_id"] for o in out if not o["image_small_url"]]
+    if gaps:
+        live = await guide._verify_live(gaps)
+        for o in out:
+            v = live.get(o["object_id"])
+            if v and v.get("image_small_url") and not o["image_small_url"]:
+                o["image_small_url"] = v["image_small_url"]
+    return out
+
+
 class SpeakRequest(BaseModel):
     text: str
     fresh: bool = False  # make it again: a retry after the voice stopped early
@@ -96,7 +127,12 @@ async def _turn(session_id: str, lock: asyncio.Lock, message: str | list,
             # Keep the conversation, but not the photo itself: it was read once, and is not stored
             sessions[session_id] = [_drop_images(m) for m in history]
         except Exception as e:  # auth, quota, a model that won't stop: show it in the chat, not as a 500
-            reply, tool_calls = f"Something went wrong: {type(e).__name__}: {str(e)[:300]}", []
+            if guide._busy(e):
+                reply = ("Google's AI service is very busy right now, and it kept asking me to slow down even after "
+                         "several retries. Please try again in a minute or two.")
+            else:
+                reply = f"Something went wrong: {type(e).__name__}: {str(e)[:300]}"
+            tool_calls = []
     return ChatResponse(response=reply, session_id=session_id, tool_calls=tool_calls)
 
 

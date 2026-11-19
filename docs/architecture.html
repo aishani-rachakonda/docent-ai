@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Docent AI Architecture</title>
+<style>
+:root {
+  --bg: #f6f2ea; --surface: #fffdf8; --surface-2: #efe8db; --ink: #1f1b16; --ink-2: #4a4239; --muted: #6b6257;
+  --line: #d6cab6; --accent: #9c2f1f; --accent-soft: #f3dcd4;
+  --agent: #9c2f1f; --code: #2f5d8a; --data: #2f6b3a; --voice: #a3621c;
+  --serif: "Times New Roman", Times, serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #171411; --surface: #211d19; --surface-2: #2b2621; --ink: #f1ebe2; --ink-2: #d6ccbd; --muted: #b3a998;
+    --line: #3a332c; --accent: #e07a5f; --accent-soft: #3d241d;
+    --agent: #e07a5f; --code: #7fb0e0; --data: #7fc28b; --voice: #e3a764;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #171411; --surface: #211d19; --surface-2: #2b2621; --ink: #f1ebe2; --ink-2: #d6ccbd; --muted: #b3a998;
+  --line: #3a332c; --accent: #e07a5f; --accent-soft: #3d241d;
+  --agent: #e07a5f; --code: #7fb0e0; --data: #7fc28b; --voice: #e3a764;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 17px/1.55 var(--serif); }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 32px 16px 60px; }
+h1 { font-weight: 400; font-size: 34px; letter-spacing: .12em; text-transform: uppercase; margin: 0; text-align: center; }
+.sub { text-align: center; font-style: italic; color: var(--ink-2); margin: 8px 0 22px; }
+.caps { font-variant-caps: all-small-caps; letter-spacing: .14em; }
+.modes { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.modes button { font: inherit; font-size: 16px; background: transparent; color: var(--ink); border: 1px solid var(--ink);
+  padding: 6px 14px; cursor: pointer; font-variant-caps: all-small-caps; letter-spacing: .12em; }
+.modes button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+.legend { display: flex; justify-content: center; gap: 18px; flex-wrap: wrap; font-size: 15px; color: var(--ink-2); margin-bottom: 22px; }
+.legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: 0; }
+.legend .l-agent::before { background: var(--agent); } .legend .l-code::before { background: var(--code); }
+.legend .l-data::before { background: var(--data); } .legend .l-voice::before { background: var(--voice); }
+.layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 24px; align-items: start; }
+
+/* The flow */
+.flow { display: flex; flex-direction: column; align-items: center; gap: 0; }
+.row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; width: 100%; }
+.arrow { width: 1px; height: 26px; background: var(--ink-2); position: relative; margin: 2px 0; }
+.arrow::after { content: ""; position: absolute; left: -4px; bottom: -1px; border: 4px solid transparent; border-top: 6px solid var(--ink-2); border-bottom: 0; }
+.arrow-label { font-size: 13px; color: var(--muted); font-style: italic; margin: -2px 0 2px; text-align: center; }
+.node { font: inherit; text-align: left; background: var(--surface); color: var(--ink); border: 1px solid var(--line);
+  border-left: 4px solid var(--agent); padding: 9px 12px; cursor: pointer; min-width: 150px; max-width: 280px;
+  transition: opacity .2s, box-shadow .2s; }
+.node.code { border-left-color: var(--code); } .node.data { border-left-color: var(--data); } .node.voice { border-left-color: var(--voice); }
+.node .kind { display: block; font-size: 13px; color: var(--muted); font-variant-caps: all-small-caps; letter-spacing: .12em; }
+.node .name { display: block; font-size: 18px; }
+.node .what { display: block; font-size: 14px; color: var(--ink-2); line-height: 1.35; margin-top: 2px; }
+.node:hover, .node:focus-visible { box-shadow: 0 0 0 2px var(--accent-soft); outline: none; }
+.node.selected { box-shadow: 0 0 0 2px var(--accent); }
+.node.dim { opacity: .28; }
+.group { border: 1px dashed var(--line); padding: 10px 10px 12px; width: 100%; position: relative; }
+.group > .caps { display: block; text-align: center; font-size: 14px; color: var(--muted); margin-bottom: 8px; }
+.loop { font-size: 14px; color: var(--accent); text-align: center; margin: 4px 0 0; font-style: italic; }
+.sources { margin-top: 26px; width: 100%; }
+.sources > .caps { display: block; text-align: center; color: var(--muted); font-size: 14px; margin-bottom: 8px; }
+
+/* Details panel */
+.panel { position: sticky; top: 16px; background: var(--surface); border: 1px solid var(--line); border-top: 3px solid var(--accent);
+  padding: 18px 20px 20px; max-height: calc(100vh - 32px); overflow: auto; }
+.panel h2 { font-weight: 400; font-size: 26px; margin: 2px 0 6px; line-height: 1.2; }
+.panel .kind { font-size: 14px; color: var(--accent); font-variant-caps: all-small-caps; letter-spacing: .14em; }
+.panel p { margin: 8px 0; }
+.panel h3 { font-weight: 400; font-size: 15px; color: var(--ink-2); font-variant-caps: all-small-caps; letter-spacing: .14em;
+  border-bottom: 1px solid var(--line); padding-bottom: 3px; margin: 18px 0 8px; }
+.panel ul { padding-left: 18px; margin: 6px 0; }
+.panel code { font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--surface-2); color: var(--ink); border: 1px solid var(--line);
+  padding: 3px 8px; cursor: pointer; }
+.chip:hover, .chip.on { border-color: var(--accent); }
+.tooldesc { background: var(--bg); border-left: 3px solid var(--code); padding: 10px 12px; margin-top: 10px; font-size: 16px; }
+.tooldesc code { font: 14px ui-monospace, Menlo, monospace; }
+.tooldesc .who { font-size: 14px; color: var(--muted); margin-top: 6px; }
+.hint { color: var(--muted); font-style: italic; }
+.foot { margin-top: 34px; font-size: 15px; color: var(--muted); text-align: center; }
+@media (max-width: 860px) {
+  .layout { grid-template-columns: 1fr; }
+  .panel { position: static; max-height: none; }
+  .node { min-width: 130px; }
+}
+@media (prefers-reduced-motion: reduce) { .node { transition: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Docent AI</h1>
+  <p class="sub">How a question becomes a cited, walkable answer. Click any box; click a tool to see what it does.</p>
+
+  <div class="modes" role="group" aria-label="Highlight a request type">
+    <button type="button" data-mode="all" aria-pressed="true">Everything</button>
+    <button type="button" data-mode="tour" aria-pressed="false">A tour</button>
+    <button type="button" data-mode="label" aria-pressed="false">A label</button>
+    <button type="button" data-mode="question" aria-pressed="false">A question</button>
+    <button type="button" data-mode="voice" aria-pressed="false">Listening</button>
+  </div>
+  <div class="legend"><span class="l-agent">Agent (Gemini 3.5 Flash)</span><span class="l-code">Code, no model</span>
+    <span class="l-data">Data source</span><span class="l-voice">Voice</span></div>
+
+  <div class="layout">
+    <div class="flow" id="flow"></div>
+    <aside class="panel" id="panel" aria-live="polite"></aside>
+  </div>
+  <p class="foot">Every tool takes a required <code>why</code>: one sentence the agent writes about why it is making that call,
+    shown live in the app's "Behind the scenes" panel. All model calls pass through one gate (at most 6 at once) and wait and
+    retry when Google is busy.</p>
+</div>
+
+<script>
+const TOOLS = {
+  research: ["Sends Researchers out in parallel, one per slice of the museum, each in a fresh context. Waits for all of them, then runs the coverage check in code: which interests were found directly, which slices came back empty, and whether to search again.", "Guide"],
+  plan_route: ["Checks every chosen object live against the Met API (still on view? which gallery?), drops any that left, orders the main stops into a walk that ends near the extras, and keeps up to 3 extras that continue the walk without doubling back. Refuses while the coverage check says a research round is still needed.", "Guide"],
+  write_tour: ["Starts one Storyteller per stop in parallel, has the Writer write the tour's frame, then assembles the tour in code: stories inserted word for word, route notes copied from the planner.", "Guide"],
+  write_answer: ["Has the Writer answer a label or collection question from the evidence passed in. A Storyteller's checked story is inserted word for word where the Writer puts its marker.", "Guide"],
+  tell_story: ["Runs one Storyteller for one object (for \"what is this?\" questions).", "Guide"],
+  find_by_accession: ["Identifies an object from the accession number on its wall label, with the label's title and artist as hints. Statuses: exact, corrected, near_confirmed, ambiguous, mismatch, not_found. This is how 1993.13 (Filatrice) is told apart from 1993.132 (the Van Gogh).", "Guide"],
+  find_by_title: ["Finds on-view objects by title and artist, when a label has no readable number.", "Guide"],
+  get_object: ["Everything the snapshot knows about one object: maker, date, medium, gallery, tags, credit line, image, and the titles of its Wikipedia articles, if any.", "Guide, Researchers"],
+  search_objects: ["Searches objects on view by keywords (all must match), with optional department, gallery, culture, artist, year range and highlights-only filters.", "Guide, Researchers"],
+  gallery_summary: ["What one gallery holds: how many objects, which departments and cultures, and its highlights. Used to suggest what to see nearby.", "Guide, Researchers"],
+  run_sql: ["Runs one read-only SELECT over the DuckDB snapshot, for counting, comparing and ranking (e.g. Monets by gallery, objects tagged Horses).", "Guide, Researchers"],
+  snapshot_info: ["The date of the data (Nov 7, 2026) and how many objects are on view, so answers can say how current they are.", "Guide"],
+  get_wikipedia: ["Reads an English Wikipedia article by exact title (up to 6,000 characters): one linked from the object or artist, or one found by search.", "Guide, Researchers, Storytellers"],
+  search_wikipedia: ["Searches English Wikipedia for article titles with a snippet each, to find background on an object's culture, period, material or subject.", "Storytellers"],
+  check_citations: ["Code, no model. Every [met:…] must be an object a tool returned in this run, every [wikipedia:…] an article actually read, and each cited sentence's names, places and numbers must appear in the source it cites. Problems go back to the agent for one revision.", "Citation check"],
+};
+
+const NODES = [
+  { id: "visitor", kind: "data", label: "Visitor", what: "On a phone in the museum", modes: ["tour", "label", "question", "voice"],
+    title: "The visitor", type: "Person",
+    body: ["Asks in plain words: \"I have an hour and love cats and horses\", a photo of a wall label, or \"how many Monets are on view?\"",
+           "The page sends it to <code>POST /chat/stream</code>, which streams every step live (the \"Behind the scenes\" panel). <code>POST /chat</code> runs the same turn and returns <code>{response, session_id, tool_calls}</code> at the end."] },
+  { id: "guide", kind: "agent", label: "Guide", what: "The Lead: plans, delegates, decides", modes: ["tour", "label", "question"],
+    title: "Guide (the Lead)", type: "Agent",
+    body: ["Reads the request and decides what kind it is. If it is too vague to plan (\"show me cool stuff\"), it asks one short question and stops.",
+           "<b>A tour:</b> its first call is <code>research</code> with the visitor's interests and 2–5 slices of the museum. It reads the coverage check, goes back for one more round if told to, picks about one main stop per 10 minutes plus 4–6 extras, then calls <code>plan_route</code> and <code>write_tour</code>.",
+           "<b>A label:</b> <code>find_by_accession</code> (title and artist as hints), then <code>tell_story</code> and <code>gallery_summary</code>, then <code>write_answer</code>.",
+           "<b>A question:</b> <code>run_sql</code> or <code>search_objects</code>, <code>snapshot_info</code> for the date, then <code>write_answer</code>.",
+           "It never writes facts itself: the Writer's checked text is the reply, word for word."],
+    limits: ["Up to 20 turns", "Stops the moment write_tour or write_answer returns"],
+    tools: ["research", "plan_route", "write_tour", "write_answer", "tell_story", "find_by_accession", "find_by_title", "get_object", "search_objects", "gallery_summary", "run_sql", "snapshot_info", "get_wikipedia"] },
+  { id: "researchers", kind: "agent", label: "Researchers 1…5", what: "Each searches one slice of the museum, in parallel", modes: ["tour"],
+    title: "Researchers", type: "Agents, in parallel",
+    body: ["Each gets only its slice (e.g. \"Egyptian Art: cats and lions\") and the visitor's interests, in a fresh context: no memory of the conversation or of each other.",
+           "Starts with a tag query when a subject tag exists (<code>list_contains(tags, 'Horses')</code>), then keyword searches with synonyms, reads its best 2–3 candidates, and may quote a fact from Wikipedia.",
+           "Returns JSON: candidates, each labeled with the interest it serves and whether it is a <i>direct</i> match (a cat for \"cats\") or only <i>related</i>, with sourced evidence; plus what it could not find."],
+    limits: ["Up to 5 at once", "8 turns each, about 6 tool calls", "Minimal thinking, for speed", "If one runs out of steps, it answers from what it already found"],
+    tools: ["run_sql", "search_objects", "get_object", "gallery_summary", "get_wikipedia"] },
+  { id: "coverage", kind: "code", label: "Coverage check", what: "Was every interest found directly?", modes: ["tour"],
+    title: "Coverage check", type: "Code, no model",
+    body: ["Counts, for each interest, how many candidates matched it directly. Flags failed or empty slices and too few candidates.",
+           "If there is a gap and a round is left, it tells the Guide to search again, and <code>plan_route</code> refuses until it does. If an interest is still unmet after the last round, the tour's first sentence says the Met has nothing that directly matches it."],
+    limits: ["At most 2 research rounds"] },
+  { id: "route", kind: "code", label: "plan_route", what: "Live check, walking order, extras", modes: ["tour"],
+    title: "plan_route", type: "Code, no model", tools: ["plan_route"],
+    body: ["Checks every stop against the Met's live API at that moment and records the time (shown as \"Stops checked live with The Met at …\"). Removes objects no longer on view; corrects galleries that moved.",
+           "Orders the main stops into a walk that ends near the extras, using a model of the building (galleries grouped into wings and floors). Extras continue the walk; ones that would double back are left out and listed.",
+           "Its notes go into \"Before you go\" word for word."] },
+  { id: "storytellers", kind: "agent", label: "Storytellers 1…n", what: "One per stop, in parallel: the story", modes: ["tour", "label"],
+    title: "Storytellers", type: "Agents, in parallel",
+    body: ["One per stop, each in a fresh context with the object's Met record and what the Researcher found.",
+           "First lists what a newcomer won't know (people, gods, periods, materials, object types), then reads Wikipedia for the background, then writes a 180–250 word story: what the piece is about, what it is, the context with every term explained, why it matters. Plus a \"look for\" for the visitor standing in front of it.",
+           "Every sentence ends with its source tag. Its own knowledge doesn't count: if no source says it, it leaves it out."],
+    limits: ["9 turns, about 6 tool calls", "One revision if the citation check finds problems"],
+    tools: ["get_wikipedia", "search_wikipedia"] },
+  { id: "citations", kind: "code", label: "Citation check", what: "Sources read? Details in the cited source?", modes: ["tour", "label", "question"],
+    title: "Citation check", type: "Code, no model", tools: ["check_citations"],
+    body: ["Runs on every story and every Writer draft. Catches a source that was never read, a fact sentence with no tag, and a name or number pinned on a source that doesn't contain it (e.g. a hospital in Saint-Rémy cited to a painting's Met record).",
+           "Problems go back to the agent for one revision. It cannot judge a reworded over-claim; that is left to evaluation."] },
+  { id: "writer", kind: "agent", label: "Writer", what: "Title, introduction, notes; or a short answer", modes: ["tour", "label", "question"],
+    title: "Writer", type: "Agent, no tools",
+    body: ["Writes only from the evidence it is given: plain words, a tag on every fact, and the data's date for counts.",
+           "<b>For a tour</b> it writes only the frame: a title, one to three sentences tying the stops together, and what the data could not tell us. The stops are laid out in code.",
+           "<b>For a label or a question</b> it writes the answer around the Storyteller's story (inserted word for word)."],
+    limits: ["No tools: evidence only", "One revision if the citation check fails"] },
+  { id: "assemble", kind: "code", label: "Assembly", what: "Stories and route notes inserted verbatim", modes: ["tour", "label"],
+    title: "Assembly", type: "Code, no model",
+    body: ["Builds the final tour without a model in between: each stop's heading, maker and date, story and \"look for\", in walking order; extras after; the planner's route notes at the top of \"Before you go\".",
+           "The page then turns each stop into a card: picture, gallery strip, \"look for\", Listen, story."] },
+  { id: "tts", kind: "voice", label: "Voice", what: "Gemini 3.1 Flash TTS, streamed", modes: ["voice"],
+    title: "Voice (Listen)", type: "Gemini 3.1 Flash TTS, voice Charon",
+    body: ["One request per paragraph (a stop's opening, then its story), so no sentence falls between requests.",
+           "<code>/speak/start</code> begins making the audio; <code>/speak/audio/&lt;id&gt;</code> streams it as MP3 while it is made, so playback starts in about 2 seconds and the next paragraph is ready in time.",
+           "The page highlights the sentence being read, plays at 1×, 1.25× or 1.5×, and if the voice stops early on a long paragraph, reads the rest again from one sentence before the cut."] },
+];
+const SOURCES = [
+  { id: "duckdb", kind: "data", label: "DuckDB snapshot", what: "44,855 on-view objects, Nov 7, 2026", modes: ["tour", "label", "question"],
+    title: "DuckDB snapshot", type: "Data source, offline build",
+    body: ["Built from The Met's Open Access CSV (340 MB) filtered to objects on view: 44,855 objects in 421 galleries, 30,429 with images, 37 columns.",
+           "A <code>wiki</code> table maps Wikidata IDs to English Wikipedia titles: 352 objects have their own article and 5,189 an artist with one. The file is 14 MB and ships with the deploy."] },
+  { id: "metapi", kind: "data", label: "Met Collection API", what: "Live: on view? which gallery?", modes: ["tour"],
+    title: "Met Collection API", type: "Data source, live",
+    body: ["Asked once per tour stop when the route is planned: is the object still on view, and in which gallery. Also the source of the image links (crawled offline)."] },
+  { id: "wiki", kind: "data", label: "Wikipedia", what: "Background articles, read live", modes: ["tour", "label"],
+    title: "Wikipedia", type: "Data source, live",
+    body: ["The REST API for article text and the search API for titles, with a contact URL in the User-Agent as Wikimedia requires. Storytellers read background on culture, period, material and subject."] },
+  { id: "gemini", kind: "agent", label: "Gemini on Vertex AI", what: "The model behind every agent", modes: ["tour", "label", "question"],
+    title: "Gemini 3.5 Flash on Vertex AI", type: "Model",
+    body: ["Every agent runs on Gemini 3.5 Flash through Vertex AI (OpenAI Agents SDK with LiteLLM). The Guide, Storytellers and Writer think at \"high\" with summaries shown live; Researchers think minimally for speed.",
+           "Vertex AI runs on shared capacity, so all model calls go through one gate (at most 6 at once) and wait and retry when Google answers \"too many requests\"."] },
+];
+
+const ALL = [...NODES, ...SOURCES];
+const byId = Object.fromEntries(ALL.map(n => [n.id, n]));
+const flow = document.getElementById("flow");
+const panel = document.getElementById("panel");
+
+function nodeEl(n) {
+  const b = document.createElement("button");
+  b.type = "button"; b.className = "node " + n.kind; b.dataset.id = n.id;
+  b.innerHTML = `<span class="kind">${n.type}</span><span class="name"></span><span class="what"></span>`;
+  b.querySelector(".name").textContent = n.label;
+  b.querySelector(".what").textContent = n.what;
+  b.addEventListener("click", () => show(n.id));
+  return b;
+}
+function arrow(label) {
+  const a = document.createElement("div"); a.className = "arrow"; flow.appendChild(a);
+  if (label) { const l = document.createElement("div"); l.className = "arrow-label"; l.textContent = label; flow.appendChild(l); }
+}
+function row(ids, groupTitle, loop) {
+  const r = document.createElement("div"); r.className = "row";
+  ids.forEach(id => r.appendChild(nodeEl(byId[id])));
+  if (!groupTitle) { flow.appendChild(r); return; }
+  const g = document.createElement("div"); g.className = "group";
+  g.innerHTML = `<span class="caps">${groupTitle}</span>`;
+  g.appendChild(r);
+  if (loop) { const p = document.createElement("p"); p.className = "loop"; p.textContent = loop; g.appendChild(p); }
+  flow.appendChild(g);
+}
+
+row(["visitor"]);
+arrow("/chat/stream");
+row(["guide"]);
+arrow("research(): in one turn, in parallel");
+row(["researchers", "coverage"], "Research rounds", "↺ A gap and a round left: the Guide must search again (up to 2 rounds)");
+arrow("plan_route()");
+row(["route"]);
+arrow("write_tour() or tell_story()");
+row(["storytellers", "citations"], "Stories, each checked");
+arrow();
+row(["writer"]);
+arrow();
+row(["assemble"]);
+arrow("the answer, with live steps all along");
+row(["tts"], "Listen");
+const s = document.createElement("div"); s.className = "sources";
+s.innerHTML = '<span class="caps">Tools reach into</span>';
+const sr = document.createElement("div"); sr.className = "row";
+SOURCES.forEach(n => sr.appendChild(nodeEl(n)));
+s.appendChild(sr); flow.appendChild(s);
+
+function show(id) {
+  const n = byId[id];
+  document.querySelectorAll(".node").forEach(b => b.classList.toggle("selected", b.dataset.id === id));
+  let h = `<span class="kind">${n.type}</span><h2></h2>`;
+  h += n.body.map(p => `<p>${p}</p>`).join("");
+  if (n.limits) h += `<h3>Limits</h3><ul>${n.limits.map(l => `<li>${l}</li>`).join("")}</ul>`;
+  if (n.tools) {
+    h += `<h3>Tools (${n.tools.length})</h3><div class="chips">${n.tools.map(t => `<button type="button" class="chip" data-tool="${t}">${t}</button>`).join("")}</div>`;
+    h += `<div id="tooldesc"><p class="hint">Click a tool to see what it does.</p></div>`;
+  }
+  panel.innerHTML = h;
+  panel.querySelector("h2").textContent = n.title;
+  panel.querySelectorAll(".chip").forEach(c => c.addEventListener("click", () => {
+    panel.querySelectorAll(".chip").forEach(x => x.classList.toggle("on", x === c));
+    const [desc, who] = TOOLS[c.dataset.tool];
+    panel.querySelector("#tooldesc").innerHTML = `<div class="tooldesc"><code>${c.dataset.tool}</code><p style="margin:4px 0 0">${desc}</p><div class="who">Used by: ${who}</div></div>`;
+  }));
+}
+
+document.querySelectorAll(".modes button").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll(".modes button").forEach(x => x.setAttribute("aria-pressed", x === b ? "true" : "false"));
+  const m = b.dataset.mode;
+  document.querySelectorAll(".node").forEach(el => el.classList.toggle("dim", m !== "all" && !byId[el.dataset.id].modes.includes(m)));
+}));
+
+show("guide");
+</script>
+</body>
+</html>
