@@ -545,7 +545,7 @@ document.querySelectorAll(".tour-card").forEach(c => c.addEventListener("click",
     clearInterval(timer);
     timer = setInterval(() => {
       if (!paused && !document.hidden && !document.body.classList.contains("started")) go(cur + 1);
-    }, slow ? 9000 : 2000);
+    }, slow ? 9000 : 3000);
   }
   stage.addEventListener("mouseenter", () => paused = true);
   stage.addEventListener("mouseleave", () => paused = false);
