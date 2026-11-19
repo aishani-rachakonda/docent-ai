@@ -164,7 +164,8 @@ async def speak_info(key: str):
     job = speech.status(key)
     if job is None:
         raise HTTPException(404, "Unknown audio")
-    return {"done": job.done, "seconds": round(job.seconds, 2), "short": job.short, "error": job.error}
+    return {"done": job.done, "seconds": round(job.seconds, 2), "short": job.short, "error": job.error,
+            "pauses": job.pauses if job.done else []}
 
 
 @app.post("/chat", response_model=ChatResponse)

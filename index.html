@@ -1210,13 +1210,16 @@ const Speech = {
         // A stream that fails before it starts is read by the browser's own voice instead
         this.player.onerror = () => { if (done) return; done = true;
           this.player.currentTime > 1 ? next() : this.browserSay(q, next); };
-        // Within a paragraph, move the highlight by each sentence's share of the text. While the
-        // audio is still streaming its length is not known yet, so it is estimated from the pace.
+        // Within a paragraph, move the highlight at the pause that ends each sentence (found in the
+        // audio by the server once it is made). Until then, estimate from each sentence's share of
+        // the text, and of the length estimated from the pace while the audio is still streaming.
         this.player.ontimeupdate = () => {
+          if (!q.timed) this.askLength(q, url);
+          const t = this.player.currentTime;
+          if (q.bounds) { this.followTime(q, t); return; }
           const d = this.player.duration;
-          if (!(isFinite(d) && d > 0) && !q.seconds) this.askLength(q, url);
           const length = isFinite(d) && d > 0 ? d : q.seconds || q.t.length / this.pace;
-          this.follow(q, Math.min(0.999, this.player.currentTime / length));
+          this.follow(q, Math.min(0.999, t / length));
         };
         this.player.play().catch(e => { if (token === this.token && !done && e.name !== "AbortError") {
           done = true; this.browserSay(q, next); } });
@@ -1225,6 +1228,30 @@ const Speech = {
       }
     };
     next();
+  },
+  // Highlight the sentence being read at this time (seconds), from the sentence ends found in the audio
+  followTime(q, t) {
+    if (!q.segs || !q.segs.length) return;
+    const k = q.bounds.findIndex(b => t < b);
+    const sg = q.segs[k < 0 ? q.segs.length - 1 : k];
+    if (this.reading !== sg.el) this.mark(sg.el);
+  },
+  // Where each sentence ends in the audio: for each sentence, the longest pause near where its share
+  // of the text says it ends. A sentence end is a pause of about a second; a comma's is much shorter.
+  // Numbers and pauses make the share alone run seconds early, which this corrects.
+  sentenceEnds(q, seconds, pauses) {
+    if (!q.segs || q.segs.length < 2 || !pauses.length) return null;
+    const ends = [];
+    let after = 0;
+    for (const sg of q.segs.slice(0, -1)) {
+      const guess = sg.end * seconds;
+      const near = pauses.filter(([mid, len]) => mid > after && Math.abs(mid - guess) <= 5 && len >= 0.35);
+      const best = near.sort((a, b) => b[1] - a[1] || Math.abs(a[0] - guess) - Math.abs(b[0] - guess))[0];
+      const at = best ? best[0] : Math.max(guess, after + 0.5);
+      ends.push(at);
+      after = at;
+    }
+    return ends.concat(Infinity);
   },
   // Highlight the sentence at this point (0 to 1) of a piece; scroll only if it is off screen
   follow(q, at) {
@@ -1270,7 +1297,12 @@ const Speech = {
     if (q.asking || Date.now() - (q.asked || 0) < 2500) return;
     q.asking = true; q.asked = Date.now();
     fetch(url.replace("/audio/", "/info/")).then(r => r.json())
-      .then(d => { if (d.done && d.seconds > 0) q.seconds = d.seconds; }).catch(() => {}).finally(() => { q.asking = false; });
+      .then(d => {
+        if (!(d.done && d.seconds > 0)) return;
+        q.seconds = d.seconds;
+        q.timed = true;
+        q.bounds = this.sentenceEnds(q, d.seconds, d.pauses || []);
+      }).catch(() => {}).finally(() => { q.asking = false; });
   },
   browserSay(q, then) {
     const text = typeof q === "string" ? q : q.t;
@@ -1310,8 +1342,12 @@ function pieceSegs(segs) {
   const flush = () => {
     if (!cur.length) return;
     const t = cur.map(x => x.text).join(" ");
+    // How long each sentence takes to say, roughly: its letters, more for digits (1852 is "eighteen
+    // fifty-two"), and a pause at its end
+    const say = x => x.text.length + 2 * (x.text.match(/\d/g) || []).length + 12;
+    const total = cur.reduce((n, x) => n + say(x), 0);
     let at = 0;
-    out.push({ t, segs: cur.map(x => ({ el: x.el, text: x.text, end: (at += x.text.length + 1) / (t.length + 1) })) });
+    out.push({ t, segs: cur.map(x => ({ el: x.el, text: x.text, end: (at += say(x)) / total })) });
     cur = [];
   };
   segs.forEach(sg => {

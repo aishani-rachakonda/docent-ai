@@ -84,10 +84,30 @@ async def synthesize(text: str, voice: str = VOICE) -> bytes:
 # also how the page prepares the next paragraph while the current one plays. Finished audio stays
 # in memory, so replaying costs nothing.
 
+import array
 import hashlib
 import json
 
 import lameenc
+
+FRAME = 0.02  # seconds per loudness reading, for finding the pauses between sentences
+
+
+def _pauses(levels: list[float]) -> list[list[float]]:
+    """Silences in the audio of at least 0.2 s, as [middle, length] in seconds. The voice pauses about
+    a second at the end of each sentence and less at commas: the page moves its highlight on these."""
+    if not levels:
+        return []
+    quiet = max(levels) * 0.03
+    out, run = [], 0
+    for k, v in enumerate(levels + [float("inf")]):
+        if v < quiet:
+            run += 1
+            continue
+        if run * FRAME >= 0.2:
+            out.append([round((k - run / 2) * FRAME, 2), round(run * FRAME, 2)])
+        run = 0
+    return out
 
 
 class _Job:
@@ -97,6 +117,8 @@ class _Job:
         self.error: str | None = None
         self.seconds = 0.0  # length of the audio made so far; the whole length once done
         self.chars = 0
+        self.levels: list[float] = []  # loudness every FRAME seconds
+        self.pauses: list[list[float]] = []  # [middle, length] of each silence, once done
         self.changed = asyncio.Condition()
 
     @property
@@ -143,6 +165,7 @@ async def _produce(job: _Job, text: str, voice: str) -> None:
             "generationConfig": {"responseModalities": ["AUDIO"],
                                  "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice}}}}}
     encoder = None
+    rest = b""  # audio not yet measured for loudness
     try:
         async with _gate, httpx.AsyncClient(timeout=180) as client:
             for attempt in range(RETRIES):
@@ -171,6 +194,12 @@ async def _produce(job: _Job, text: str, voice: str) -> None:
                                 encoder.set_quality(2)
                             pcm = base64.b64decode(data["data"])
                             job.seconds += len(pcm) / 2 / rate
+                            rest += pcm
+                            step = int(rate * FRAME) * 2
+                            while len(rest) >= step:
+                                frame = array.array("h", rest[:step])
+                                job.levels.append((sum(x * x for x in frame) / len(frame)) ** .5)
+                                rest = rest[step:]
                             await job.add(bytes(encoder.encode(pcm)))
                     break
         if encoder is not None:
@@ -180,6 +209,7 @@ async def _produce(job: _Job, text: str, voice: str) -> None:
     except Exception as e:  # the page falls back to the browser's own voice for this paragraph
         job.error = f"{type(e).__name__}"
     finally:
+        job.pauses = _pauses(job.levels)
         job.done = True
         await job.add(b"")
 
