@@ -60,14 +60,16 @@ def snapshot():
 
 
 @app.get("/featured")
-def featured(n: int = 12):
-    """A random handful of Met highlights on view at Fifth Avenue with open-access pictures, for the landing page."""
+def featured(response: Response, n: int = 12):
+    """A random handful of Met highlights on view at Fifth Avenue with open-access pictures, for the landing page.
+    A new draw every time: never cached."""
+    response.headers["Cache-Control"] = "no-store"
     return met_tools._rows("""
         SELECT object_id, COALESCE(title, concat_ws(', ', object_name, culture)) AS title, gallery, image_small_url, met_url,
                COALESCE(NULLIF(artist, ''), culture) AS maker, object_date
         FROM objects
         WHERE is_highlight AND image_small_url IS NOT NULL AND department <> 'The Cloisters'
-        ORDER BY random() LIMIT ?""", [max(1, min(n, 24))])
+        ORDER BY random() LIMIT ?""", [max(1, min(n, 48))])
 
 
 @app.get("/objects")

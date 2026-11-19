@@ -476,20 +476,32 @@ document.querySelectorAll(".tour-card").forEach(c => c.addEventListener("click",
 // Landing showcase: random Met highlights on view. Each sits at a place relative to the current one
 // (0 = center, ±1 beside it, ±2 further out); stepping on moves them all one place, so the next work comes
 // forward, grows and brightens while the last one steps back. Works more than two places away are hidden,
-// which is where one wraps from the far left to the far right unseen.
+// which is where one wraps from the far left to the far right unseen. As a work leaves on the left, its
+// frame takes a new work from the collection, so the carousel keeps showing new pieces instead of looping.
 (async function showcase() {
   const stage = document.getElementById("showcase"), cap = document.getElementById("showcaseCap");
-  let items = [];
-  try { items = await fetch("/featured?n=12").then(r => r.ok ? r.json() : []); } catch (e) { return; }
-  const n = items.length;
-  if (n < 6) return;
+  const seen = new Set(), queue = [];
+  let fetching = false;
+  const named = o => ({ ...o, name: String(o.title || "").split("|").pop().trim() });
+  async function refill() {
+    if (fetching) return;
+    fetching = true;
+    try {
+      const batch = await fetch("/featured?n=24").then(r => r.ok ? r.json() : []);
+      batch.forEach(o => { if (!seen.has(o.object_id)) { seen.add(o.object_id); queue.push(named(o)); } });
+    } catch (e) {}
+    fetching = false;
+  }
+  await refill();
+  const n = 12;
+  if (queue.length < n) return;
+  const items = queue.splice(0, n);
   const nodes = items.map((o, i) => {
     const b = el("button", "sc-item"), img = el("img");
-    o.name = String(o.title || "").split("|").pop().trim();
     img.src = o.image_small_url; img.alt = o.name;
     b.type = "button"; b.append(img);
     b.addEventListener("click", () => {
-      if (i === cur) window.open(o.met_url, "_blank", "noopener"); else { go(i); restart(); }
+      if (i === cur) window.open(items[i].met_url, "_blank", "noopener"); else { go(i); restart(); }
     });
     stage.append(b);
     return b;
@@ -502,6 +514,10 @@ document.querySelectorAll(".tour-card").forEach(c => c.addEventListener("click",
       let rel = (i - cur + n) % n;
       if (rel > n / 2) rel -= n;
       const d = Math.abs(rel);
+      if (rel === -3 && queue.length) {  // just left the view: hang a new work in this frame
+        items[i] = queue.shift();
+        const img = b.querySelector("img"); img.src = items[i].image_small_url; img.alt = items[i].name;
+      }
       const scale = d === 0 ? 1 : d === 1 ? .74 : .6;
       b.style.transform = `translateX(${rel * gap}px) scale(${scale})`;
       b.style.opacity = d === 0 ? 1 : d === 1 ? .6 : d === 2 ? .28 : 0;
@@ -523,7 +539,7 @@ document.querySelectorAll(".tour-card").forEach(c => c.addEventListener("click",
       cap.classList.remove("fading");
     }, 300);
   }
-  function go(i) { cur = (i + n) % n; place(); }
+  function go(i) { cur = (i + n) % n; place(); if (queue.length < 8) refill(); }
   const slow = matchMedia("(prefers-reduced-motion: reduce)").matches;
   function restart() {
     clearInterval(timer);
